@@ -1,4 +1,3 @@
-# Brain Inspired Computing Final Project: SNNs for Automatic Arrhythmia Detection
 
 ## Installation
 
