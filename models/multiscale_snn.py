@@ -20,9 +20,10 @@ def get_activation_fn(act_name, act_kwargs):
         return nn.Sigmoid()
     
 '''
-Multi-Scale LIF Layer: The same thing as the hierarchical snn but without boundary gating
+Same as Hierarchical SNN but without boundary gating
 '''
-class Multiscale_Top_Cell(nn.Module):
+
+class LIF_Top_Cell(nn.Module):
 
     def __init__(
             self, 
@@ -46,7 +47,7 @@ class Multiscale_Top_Cell(nn.Module):
         linear_options: options to pass to projection layers
         '''
 
-        super(Multiscale_Top_Cell, self).__init__()
+        super(LIF_Top_Cell, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -55,8 +56,7 @@ class Multiscale_Top_Cell(nn.Module):
         self.spike_grad = spike_grad
 
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
-        self.z_v = HebbianLinearLayer(out_dims, out_dims, **linear_options) # spike to voltage
-
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
     def forward(self, b_in, v_previous, z_previous):
 
@@ -66,10 +66,9 @@ class Multiscale_Top_Cell(nn.Module):
 
         z_out = self.spike_grad(v_out - self.threshold)
 
-
         return v_out, z_out
     
-class Multiscale_Middle_Cell(nn.Module):
+class LIF_Middle_Cell(nn.Module):
 
     def __init__(
             self, 
@@ -95,7 +94,7 @@ class Multiscale_Middle_Cell(nn.Module):
         linear_options: options to pass to projection layers
         '''
 
-        super(Multiscale_Middle_Cell, self).__init__()
+        super(LIF_Middle_Cell, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -105,10 +104,9 @@ class Multiscale_Middle_Cell(nn.Module):
 
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
-        self.z_v = HebbianLinearLayer(out_dims, out_dims, **linear_options) # spike to voltage
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
-
-    def forward(self, b_in, t_in, v_previous, z_previous):
+    def forward(self, b_in, t_in, v_previous, z_previous, b_previous):
 
         v_out = self.beta * v_previous + self.z_v(z_previous) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
@@ -119,7 +117,7 @@ class Multiscale_Middle_Cell(nn.Module):
 
         return v_out, z_out
     
-class Multiscale_Bottom_Cell(nn.Module):
+class LIF_Bottom_Cell(nn.Module):
 
     def __init__(
             self, 
@@ -145,7 +143,7 @@ class Multiscale_Bottom_Cell(nn.Module):
         linear_options: options to pass to projection layers
         '''
 
-        super(Multiscale_Bottom_Cell, self).__init__()
+        super(LIF_Bottom_Cell, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -155,7 +153,7 @@ class Multiscale_Bottom_Cell(nn.Module):
 
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
-        self.z_v = HebbianLinearLayer(out_dims, out_dims, **linear_options) # spike to voltage
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
 
     def forward(self, b_in, t_in, v_previous, z_previous):
@@ -168,7 +166,7 @@ class Multiscale_Bottom_Cell(nn.Module):
 
         return v_out, z_out
 
-# Basic 2-Layer SNN Using LIF Neurons
+# Basic 2-Layer SNN
 class TwoLayer_MultiscaleSNN(nn.Module):
 
     def __init__(
@@ -178,7 +176,7 @@ class TwoLayer_MultiscaleSNN(nn.Module):
             recurrent_dims: List[int],
             out_act: str = 'none',
             out_act_kwargs: dict = {},
-            neuron_options: dict = {
+            neuron_options: dict | List[dict] = {
                 'beta': 0.9,
                 'threshold': 1.0,
                 'spike_grad': surrogate.atan(alpha=2), 
@@ -188,8 +186,7 @@ class TwoLayer_MultiscaleSNN(nn.Module):
                     'bias': True
                 }
             },
-            spike_accumulator: str = 'sum',
-            logging: bool = False,
+            neuron_type: str = 'LIF',
         ):
 
         '''
@@ -205,17 +202,22 @@ class TwoLayer_MultiscaleSNN(nn.Module):
 
         super(TwoLayer_MultiscaleSNN, self).__init__()
 
+        if isinstance(neuron_options, dict):
+            neuron_options = [neuron_options, neuron_options]
+
         self.in_dims = in_dims
         self.out_dims = out_dims
         self.recurrent_dims = recurrent_dims
-        self.accumulate = spike_accumulator
-        self.logging = logging
 
-        self.bottom_cell = Multiscale_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options)
-        self.top_cell = Multiscale_Top_Cell(self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options)
+        if neuron_type in ['ALIF', 'alif']:
+            self.bottom_cell = None
+            self.top_cell = None
+        else:
+            self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[0])
+            self.top_cell = LIF_Top_Cell(self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[1])
 
         self.fc = nn.Sequential(
-            HebbianLinearLayer(self.recurrent_dims[1], self.out_dims, **neuron_options['linear_options']),
+            HebbianLinearLayer(self.recurrent_dims[1], self.out_dims, **neuron_options[0]['linear_options']),
             get_activation_fn(out_act, out_act_kwargs)
         )
 
@@ -231,24 +233,21 @@ class TwoLayer_MultiscaleSNN(nn.Module):
         v_1 = torch.zeros(B, self.recurrent_dims[1])
         z_1 = torch.zeros(B, self.recurrent_dims[1])
 
-        out_spikes = []
+        outputs = []
 
         for t in range(T):
             x_t = x[:, t, :]
 
             v_0, z_0 = self.bottom_cell(x_t, z_1, v_0, z_0) # output spikes are inputs to next layer
             v_1, z_1 = self.top_cell(z_0, v_1, z_1)
-
-            out_spikes.append(z_1)
-
-        
-        if self.accumulate == 'sum':
-            out_spikes = torch.stack(out_spikes).transpose(0, 1).mean(1)
-            output = self.fc(out_spikes)
-        else:
             output = self.fc(z_1)
 
-        return output
+            outputs.append(output.clone())
+
+        outputs = torch.stack(outputs, 1)
+
+        return outputs, output
+
     
 if __name__ == '__main__':
     net = TwoLayer_MultiscaleSNN(32, 16, [48, 64])

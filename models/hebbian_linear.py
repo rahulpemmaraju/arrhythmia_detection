@@ -35,7 +35,8 @@ class HebbianLinearLayer(nn.Module):
     def __init__(
             self, 
             in_channels, 
-            out_channels, 
+            out_channels,
+            masked=False, 
             bias=False, 
             learning_rule='oja',
             learning_rate=1e-4,
@@ -45,6 +46,7 @@ class HebbianLinearLayer(nn.Module):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.masked = masked
         self.learning_rate = learning_rate
 
         self.w = nn.Parameter(torch.Tensor(out_channels, in_channels))
@@ -52,6 +54,12 @@ class HebbianLinearLayer(nn.Module):
 
         if self.bias == True:
             self.w = nn.Parameter(torch.Tensor(out_channels, in_channels + 1))
+
+        if self.masked:
+            if self.bias == True:
+                self.register_buffer('diagonal_mask', (1 - torch.eye(out_channels, in_channels + 1)).to(dtype=torch.float32))
+            else:
+                self.register_buffer('diagonal_mask', (1 - torch.eye(out_channels, in_channels)).to(dtype=torch.float32))
 
         self._init_weights()
 
@@ -70,9 +78,10 @@ class HebbianLinearLayer(nn.Module):
         if self.bias:
             x = torch.cat((x, torch.ones((x.shape[0], 1), device=x.device)), dim=1)
         
-        y = x @ self.w.t()
-
-        return y
+        if self.masked:
+            return x @ (self.w * self.diagonal_mask).t()
+        else:
+            return x @ self.w.t()
 
 
     def forward_hebbian(self, x):

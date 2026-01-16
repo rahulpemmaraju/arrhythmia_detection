@@ -24,9 +24,10 @@ def get_threshold(model, val_loader, encoder, device='cpu'):
 
             data, target = data.to(device), target.to(device)
 
-            output = model(data).squeeze(1)
+            output, _ = model(data)
+            output = output.sum(dim=(1,2))
     
-            y_true.append(target.numpy())
+            y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
 
     y_true = np.concatenate(y_true, axis=0)
@@ -54,14 +55,15 @@ def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, devic
 
             data, target = data.to(device), target.to(device)
 
-            output = model(data).squeeze(1)
+            output, _ = model(data)
+            output = output.squeeze(-1).sum(dim=(1))
 
             if not binary:
                 output = output.argmax(-1)
             else:
                 output = (output > threshold).int()
 
-            y_true.append(target.numpy())
+            y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
 
     y_true = np.concatenate(y_true, axis=0)
@@ -73,7 +75,7 @@ def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, devic
     
 
 
-def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu'):
+def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu', display=False):
     y_true = []
     y_pred = []
 
@@ -87,9 +89,10 @@ def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu')
 
             data, target = data.to(device), target.to(device)
 
-            output = model(data).squeeze(1)
+            output, _ = model(data)
+            output = output.squeeze(-1).sum(dim=(1))
     
-            y_true.append(target.numpy())
+            y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
 
     y_true = np.concatenate(y_true, axis=0)
@@ -107,8 +110,10 @@ def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu')
     ax.legend()
 
     fig.savefig(os.path.join(log_dir, 'test_roc.png'), dpi=300)  # high resolution
-    plt.show()
 
+    if display == True:
+        plt.show()
+        
     y_pred = (y_pred > threshold).astype(int)
     cm = confusion_matrix(y_true, y_pred)
     disp = ConfusionMatrixDisplay(cm)
@@ -116,4 +121,6 @@ def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu')
 
     plt.title("Confusion Matrix")
     plt.savefig(os.path.join(log_dir, 'test_confusion_matrix.png'), dpi=300, bbox_inches='tight')
-    plt.show()
+
+    if display == True:
+        plt.show()

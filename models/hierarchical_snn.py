@@ -34,7 +34,7 @@ middle-level neurons receive top-down and bottom-up signals to integrate both to
 z[t] = (v[t] - v_thresh) > 0
 b[t] = Sigmoid(U * z[t]) -> use soft sigmoid
 '''
-class Hierarchical_Top_Cell(nn.Module):
+class LIF_Top_Cell(nn.Module):
 
     def __init__(
             self, 
@@ -58,7 +58,7 @@ class Hierarchical_Top_Cell(nn.Module):
         linear_options: options to pass to projection layers
         '''
 
-        super(Hierarchical_Top_Cell, self).__init__()
+        super(LIF_Top_Cell, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -67,7 +67,7 @@ class Hierarchical_Top_Cell(nn.Module):
         self.spike_grad = spike_grad
 
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
-        self.z_v = HebbianLinearLayer(out_dims, out_dims, **linear_options) # spike to voltage
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
         # spike to boundary
         self.z_b = nn.Sequential(
@@ -75,7 +75,7 @@ class Hierarchical_Top_Cell(nn.Module):
             nn.Sigmoid()
         )
 
-        self.b_grad = surrogate.sigmoid()
+        self.b_grad = surrogate.atan(alpha=2)
 
     def forward(self, b_in, b_b, v_previous, z_previous):
 
@@ -90,7 +90,7 @@ class Hierarchical_Top_Cell(nn.Module):
 
         return v_out, z_out, b_out
     
-class Hierarchical_Middle_Cell(nn.Module):
+class LIF_Middle_Cell(nn.Module):
 
     def __init__(
             self, 
@@ -116,7 +116,7 @@ class Hierarchical_Middle_Cell(nn.Module):
         linear_options: options to pass to projection layers
         '''
 
-        super(Hierarchical_Middle_Cell, self).__init__()
+        super(LIF_Middle_Cell, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -126,14 +126,14 @@ class Hierarchical_Middle_Cell(nn.Module):
 
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
-        self.z_v = HebbianLinearLayer(out_dims, out_dims, **linear_options) # spike to voltage
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
         # spike to boundary
         self.z_b = nn.Sequential(
             HebbianLinearLayer(out_dims, 1, **linear_options),
             nn.Sigmoid()
         )
-        self.b_grad = surrogate.sigmoid()
+        self.b_grad = surrogate.atan(alpha=2)
 
     def forward(self, b_in, b_b, t_in, t_b, v_previous, z_previous, b_previous):
 
@@ -149,7 +149,7 @@ class Hierarchical_Middle_Cell(nn.Module):
 
         return v_out, z_out, b_out
     
-class Hierarchical_Bottom_Cell(nn.Module):
+class LIF_Bottom_Cell(nn.Module):
 
     def __init__(
             self, 
@@ -175,7 +175,7 @@ class Hierarchical_Bottom_Cell(nn.Module):
         linear_options: options to pass to projection layers
         '''
 
-        super(Hierarchical_Bottom_Cell, self).__init__()
+        super(LIF_Bottom_Cell, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -185,14 +185,187 @@ class Hierarchical_Bottom_Cell(nn.Module):
 
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
-        self.z_v = HebbianLinearLayer(out_dims, out_dims, **linear_options) # spike to voltage
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
         # spike to boundary
         self.z_b = nn.Sequential(
             HebbianLinearLayer(out_dims, 1, **linear_options),
             nn.Sigmoid()
         )
-        self.b_grad = surrogate.sigmoid()
+        self.b_grad = surrogate.atan(alpha=2)
+
+    def forward(self, b_in, t_in, t_b, v_previous, z_previous, b_previous):
+        v_out = (1 - b_previous) * (self.beta * v_previous + self.z_v(z_previous)) # layer dynamics
+        v_out += self.b_v(b_in) # bottom-up signal
+        v_out += t_b * self.t_v(t_in) # top_down signal
+        v_out -= (z_previous * self.threshold).detach() # reset mechanism
+
+        z_out = self.spike_grad(v_out - self.threshold)
+
+        b_out = self.z_b(z_out)
+        b_out = self.b_grad(b_out - 0.5)
+
+        return v_out, z_out, b_out
+    
+class ALIF_Top_Cell(nn.Module):
+
+    def __init__(
+            self, 
+            in_dims, 
+            out_dims,
+            beta = 0.9, 
+            threshold = 1.0, 
+            spike_grad = surrogate.atan(alpha=2), 
+            linear_options = {
+                'learning_rule': 'oja',
+                'learning_rate': 1e-4,
+                'bias': True
+        }):
+        
+        '''
+        in_dims: shape of input to layer
+        out_dims: shape of output of layer
+        beta: voltage decay
+        threshold: spiking threshold
+        spike_grad: spiking function with surrogate gradient (built into snntorch)
+        linear_options: options to pass to projection layers
+        '''
+
+        super(ALIF_Top_Cell, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.beta = beta
+        self.threshold = threshold
+        self.spike_grad = spike_grad
+
+        self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
+
+        # spike to boundary
+        self.z_b = nn.Sequential(
+            HebbianLinearLayer(out_dims, 1, **linear_options),
+            nn.Sigmoid()
+        )
+
+        self.b_grad = surrogate.atan(alpha=2)
+
+    def forward(self, b_in, b_b, v_previous, z_previous):
+
+        v_out = self.beta * v_previous + self.z_v(z_previous) # layer dynamics
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
+        v_out -= (z_previous * self.threshold).detach() # reset mechanism
+
+        z_out = self.spike_grad(v_out - self.threshold)
+
+        b_out = self.z_b(z_out)
+        b_out = self.b_grad(b_out - 0.5)
+
+        return v_out, z_out, b_out
+    
+class ALIF_Middle_Cell(nn.Module):
+
+    def __init__(
+            self, 
+            in_dims, 
+            out_dims,
+            next_dims,
+            beta = 0.9, 
+            threshold = 1.0, 
+            spike_grad = surrogate.atan(alpha=2), 
+            linear_options = {
+                'learning_rule': 'oja',
+                'learning_rate': 1e-4,
+                'bias': True
+        }):
+        
+        '''
+        in_dims: shape of input to layer
+        out_dims: shape of output of layer
+        next_dims: shape of output of layer l+1
+        beta: voltage decay
+        threshold: spiking threshold
+        spike_grad: spiking function with surrogate gradient (built into snntorch)
+        linear_options: options to pass to projection layers
+        '''
+
+        super(ALIF_Middle_Cell, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.beta = beta
+        self.threshold = threshold
+        self.spike_grad = spike_grad
+
+        self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
+        self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
+
+        # spike to boundary
+        self.z_b = nn.Sequential(
+            HebbianLinearLayer(out_dims, 1, **linear_options),
+            nn.Sigmoid()
+        )
+        self.b_grad = surrogate.atan(alpha=2)
+
+    def forward(self, b_in, b_b, t_in, t_b, v_previous, z_previous, b_previous):
+
+        v_out = (1 - b_previous) * (self.beta * v_previous + self.z_v(z_previous)) # layer dynamics
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
+        v_out += t_b * self.t_v(t_in) # top_down signal
+        v_out -= (z_previous * self.threshold).detach() # reset mechanism
+
+        z_out = self.spike_grad(v_out - self.threshold)
+
+        b_out = self.z_b(z_out)
+        b_out = self.b_grad(b_out - 0.5)
+
+        return v_out, z_out, b_out
+    
+class ALIF_Bottom_Cell(nn.Module):
+
+    def __init__(
+            self, 
+            in_dims, 
+            out_dims,
+            next_dims,
+            beta = 0.9, 
+            threshold = 1.0, 
+            spike_grad = surrogate.atan(alpha=2), 
+            linear_options = {
+                'learning_rule': 'oja',
+                'learning_rate': 1e-4,
+                'bias': True
+        }):
+        
+        '''
+        in_dims: shape of input to layer
+        out_dims: shape of output of layer
+        next_dims: shape of output of layer l+1
+        beta: voltage decay
+        threshold: spiking threshold
+        spike_grad: spiking function with surrogate gradient (built into snntorch)
+        linear_options: options to pass to projection layers
+        '''
+
+        super(ALIF_Bottom_Cell, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.beta = beta
+        self.threshold = threshold
+        self.spike_grad = spike_grad
+
+        self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
+        self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
+        self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
+
+        # spike to boundary
+        self.z_b = nn.Sequential(
+            HebbianLinearLayer(out_dims, 1, **linear_options),
+            nn.Sigmoid()
+        )
+        self.b_grad = surrogate.atan(alpha=2)
 
     def forward(self, b_in, t_in, t_b, v_previous, z_previous, b_previous):
         v_out = (1 - b_previous) * (self.beta * v_previous + self.z_v(z_previous)) # layer dynamics
@@ -207,7 +380,8 @@ class Hierarchical_Bottom_Cell(nn.Module):
 
         return v_out, z_out, b_out
 
-# Basic 2-Layer SNN Using LIF Neurons
+
+# Basic 2-Layer SNN
 class TwoLayer_HierarchicalSNN(nn.Module):
 
     def __init__(
@@ -217,7 +391,7 @@ class TwoLayer_HierarchicalSNN(nn.Module):
             recurrent_dims: List[int],
             out_act: str = 'none',
             out_act_kwargs: dict = {},
-            neuron_options: dict = {
+            neuron_options: dict | List[dict] = {
                 'beta': 0.9,
                 'threshold': 1.0,
                 'spike_grad': surrogate.atan(alpha=2), 
@@ -227,8 +401,7 @@ class TwoLayer_HierarchicalSNN(nn.Module):
                     'bias': True
                 }
             },
-            spike_accumulator: str = 'sum',
-            logging: bool = False,
+            neuron_type: str = 'LIF',
         ):
 
         '''
@@ -247,14 +420,19 @@ class TwoLayer_HierarchicalSNN(nn.Module):
         self.in_dims = in_dims
         self.out_dims = out_dims
         self.recurrent_dims = recurrent_dims
-        self.accumulate = spike_accumulator
-        self.logging = logging
 
-        self.bottom_cell = Hierarchical_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options)
-        self.top_cell = Hierarchical_Top_Cell(self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options)
+        if isinstance(neuron_options, dict):
+            neuron_options = [neuron_options, neuron_options]
+
+        if neuron_type in ['ALIF', 'alif']:
+            self.bottom_cell = None
+            self.top_cell = None
+        else:
+            self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[0])
+            self.top_cell = LIF_Top_Cell(self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[1])
 
         self.fc = nn.Sequential(
-            HebbianLinearLayer(self.recurrent_dims[1], self.out_dims, **neuron_options['linear_options']),
+            HebbianLinearLayer(self.recurrent_dims[1], self.out_dims, **neuron_options[0]['linear_options']),
             get_activation_fn(out_act, out_act_kwargs)
         )
 
@@ -272,34 +450,38 @@ class TwoLayer_HierarchicalSNN(nn.Module):
         z_1 = torch.zeros(B, self.recurrent_dims[1])
         b_1 = torch.zeros(B, 1)
 
-        out_spikes = []
-        b_vals = []
+        outputs = []
 
         for t in range(T):
             x_t = x[:, t, :]
 
             v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0) # output spikes are inputs to next layer
             v_1, z_1, b_1 = self.top_cell(z_0, b_0, v_1, z_1)
-
-            out_spikes.append(z_1)
-
-            if self.logging:
-                b_vals.append((b_0.detach().numpy(), b_1.detach().numpy()))
-        
-        if self.accumulate == 'sum':
-            out_spikes = torch.stack(out_spikes).transpose(0, 1).mean(1)
-            output = self.fc(out_spikes)
-        else:
             output = self.fc(z_1)
 
-        if self.logging:
-            return output, b_vals
+            outputs.append(output.clone())
 
-        return output
+        outputs = torch.stack(outputs, 1)
+
+        return outputs, output
     
 if __name__ == '__main__':
-    net = TwoLayer_HierarchicalSNN(32, 16, [48, 64])
-    x = torch.randn((5, 10, 32))
+
+    from torchviz import make_dot, make_dot_from_trace
+
+    net = TwoLayer_HierarchicalSNN(32, 16, [48, 64], neuron_options = {
+                'beta': 0.9,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': False,
+                }
+            },)
+    x = torch.randn((3, 10, 32))
 
     output = net(x)
-    print(output)
+    dot = make_dot(output.mean(), params=dict(net.named_parameters()))
+    dot.render("computational_graph_two_layer_hnn", format="png", cleanup=True)
+

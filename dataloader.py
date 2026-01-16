@@ -34,7 +34,7 @@ class ECGWaveformDataset(Dataset):
         sample = self.metadata.iloc[idx]
 
         waveform = self.data[sample.array_index]
-        label = torch.tensor(sample.label, dtype=torch.long)
+        label = torch.tensor(sample.label, dtype=torch.long).repeat(waveform.shape)
 
         if self.binary:
             label = torch.tensor(label > 0, dtype=torch.float32)
@@ -127,7 +127,7 @@ def train_test_val_split(
         pos_df = metadata_df[metadata_df["label"] != 0]
         num_pos = len(pos_df)
 
-        neg_sampled = neg_df.sample(n=num_pos, random_state=random_state)
+        neg_sampled = neg_df.sample(n=num_pos, random_state=42)
         metadata_df = pd.concat([neg_sampled, pos_df]).sample(frac=1, random_state=42).reset_index(drop=True)
 
     patients = metadata_df['patient'].unique()
@@ -163,9 +163,9 @@ if __name__ == '__main__':
     metadata = '../beat_neurokit_1.csv'
     out_size = None
 
-    
-    train_dataset, val_dataset, test_dataset = train_test_val_split(data_file, metadata, 0.6, 0.2, 0.2, balance=True, random_state=42, fourier=True)
-    print(get_dataset_statistics(train_dataset))
+    for rs in [1, 2, 3, 4, 5, 6]:
+        train_dataset, val_dataset, test_dataset = train_test_val_split(data_file, metadata, 0.6, 0.2, 0.2, balance=True, random_state=rs, fourier=True)
+        print(test_dataset.metadata['patient'].unique())
     # print(np.where(train_dataset.metadata["label"] == 1)[0])
 
     # print(train_dataset.metadata['label'].value_counts())
