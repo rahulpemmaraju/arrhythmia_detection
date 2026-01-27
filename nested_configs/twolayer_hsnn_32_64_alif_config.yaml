@@ -1,0 +1,84 @@
+bounds:
+  alpha_0:
+  - 0.
+  - 1.
+  beta_0:
+  - 0.
+  - 1.
+  rho_0:
+  - 0.
+  - 1.
+  threshold_0:
+  - 0.5
+  - 2.
+  alpha_1:
+  - 0.
+  - 1.
+  beta_1:
+  - 0.
+  - 1.
+  rho_1:
+  - 0.
+  - 1.
+  threshold_1:
+  - 0.5
+  - 2.
+  alpha_out:
+  - 0.
+  - 1.
+  threshold_out:
+  - 0.5
+  - 2.
+  lr:
+  - 0.00001
+  - 0.1
+
+stages:
+- source: nested_train
+  get_args_static: get_random_seeds
+  compute_features: train_model
+  filter_features: combine_losses
+  get_objectives: get_objectives
+
+optimization_title: two_layer_hsnn_alif
+param_gen: OptunaOptimizer
+param_gen_kwargs:
+    sampler: TPESampler
+
+x0:
+  alpha_0: 0.5
+  beta_0: 0.5
+  rho_0: 0.5
+  threshold_0: 1.0
+  alpha_1: 0.5
+  beta_1: 0.5
+  rho_1: 0.5
+  threshold_1: 1.0
+  alpha_out: 0.5
+  threshold_out: 1.0
+  lr: 0.001
+
+
+kwargs:
+  num_seeds: 5
+  model_type: two_layer_hsnn
+  recurrent_dims:
+  - 32
+  - 64
+  neuron_type: alif
+  out_type: lif
+  bias: True
+  dataset_configs:
+    data_file: "/Users/rahul/Documents/Milstein_lab/arrhythmia_detection/beat_neurokit_1.hdf5"
+    metadata: "/Users/rahul/Documents/Milstein_lab/arrhythmia_detection/beat_neurokit_1.csv"
+    train_prop: 0.6
+    val_prop: 0.2
+    test_prop: 0.2
+    balance: true
+    fourier: false
+  train_batch_size: 64
+  eval_batch_size: 128
+  num_epochs: 2
+  val_steps: 1
+  optimizer: adamw
+

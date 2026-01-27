@@ -11,7 +11,7 @@ import pandas as pd
 from sklearn.metrics import confusion_matrix, roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
-from models import TwoLayer_SNN, TwoLayer_HierarchicalSNN, TwoLayer_MultiscaleSNN, TwoLayer_GatedSNN, TwoLayer_HGSNN, OneLayer_SNN
+from models import TwoLayer_SNN, TwoLayer_HierarchicalSNN, ThreeLayer_HierarchicalSNN, TwoLayer_MultiscaleSNN, TwoLayer_GatedSNN, TwoLayer_HGSNN, OneLayer_SNN
 from utils.encoding import Rate_Encoder, Current_Encoder
 
 # get 5-fold validation model performance
@@ -81,25 +81,40 @@ if __name__ == '__main__':
 
     # --- Model Configs --- #
     model_configs = {
-        'in_dims': 1,
-        'out_dims': out_dims,
-        'recurrent_dims': [32, 64],
-        'out_act': 'none',
-        'out_act_kwargs': {},
-        'neuron_options': {
-            'beta': 0.9,
-            'threshold': 1.0,
-            'spike_grad': surrogate.atan(alpha=2), 
-            'linear_options':{
-                'learning_rule': 'oja',
-                'learning_rate': 1e-4,
-                'bias': True
-            }
-        },
-        'neuron_type': 'lif'
+            'in_dims': 1,
+            'out_dims': out_dims,
+            'recurrent_dims': [32, 64, out_dims], # FOR ONE LAYER: [128], FOR TWO/THREE LAYER: [32, 64], FOR THREE LAYER: [32, 64, out_dim]
+            'out_act': 'none',
+            'out_act_kwargs': {},
+            'neuron_options': {
+                'alpha': 0.9,
+                'beta': 0.1,
+                'rho': 0.1,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
+            'neuron_type': 'alif',
+            'out_type': 'alif',
+            'out_options': {
+                'alpha': 0.9,
+                'beta': 0.1,
+                'rho': 0.1,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
     }
 
-    model_name = 'lif_msnn_binary_current_balanced'
+    model_name = 'alif_threelayer_hsnn_binary_current_balanced_spikeout'
     model_weights = [f's_{seed}_{model_name}' for seed in random_seeds]
     weight_folder = '../train_weights'
     results_folder = '../model_results'
@@ -108,7 +123,7 @@ if __name__ == '__main__':
 
     results_path = os.path.join(results_folder, model_name + '.csv')
     
-    model = TwoLayer_MultiscaleSNN(**model_configs)
+    model = ThreeLayer_HierarchicalSNN(**model_configs)
     
 
     model_vals = []

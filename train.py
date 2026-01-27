@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from dataloader import train_test_val_split, get_dataset_statistics
-from models import TwoLayer_HierarchicalSNN, TwoLayer_MultiscaleSNN, TwoLayer_GatedSNN, TwoLayer_HGSNN, TwoLayer_SNN, OneLayer_SNN
+from models import ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, TwoLayer_MultiscaleSNN, TwoLayer_GatedSNN, TwoLayer_HGSNN, TwoLayer_SNN, OneLayer_SNN
 from utils.encoding import Rate_Encoder, Current_Encoder
 
 from utils.logging import log_model
@@ -157,15 +157,17 @@ if __name__ == '__main__':
             out_dims = 5
 
 
-        model_name = f's_{seed}_lif_msnn_binary_current_balanced'
+        model_name = f's_{seed}_alif_threelayer_hsnn_binary_current_balanced_spikeout'
         model_configs = {
             'in_dims': 1,
             'out_dims': out_dims,
-            'recurrent_dims': [32, 64], # FOR ONE LAYER: [128], FOR EVERYTHING ELSE: [32, 64]
+            'recurrent_dims': [32, 64, out_dims], # FOR ONE LAYER: [128], FOR TWO/THREE LAYER: [32, 64], FOR THREE LAYER: [32, 64, out_dim]
             'out_act': 'none',
             'out_act_kwargs': {},
             'neuron_options': {
-                'beta': 0.9,
+                'alpha': 0.9,
+                'beta': 0.1,
+                'rho': 0.1,
                 'threshold': 1.0,
                 'spike_grad': surrogate.atan(alpha=2), 
                 'linear_options':{
@@ -174,11 +176,23 @@ if __name__ == '__main__':
                     'bias': True
                 }
             },
-            'neuron_type': 'lif'
+            'neuron_type': 'alif',
+            'out_type': 'alif',
+            'out_options': {
+                'alpha': 0.9,
+                'beta': 0.1,
+                'rho': 0.1,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
         }
 
-        model = TwoLayer_MultiscaleSNN(**model_configs)
-
+        model = ThreeLayer_HierarchicalSNN(**model_configs)
 
         # --- Create Datasets/DataLoaders --- #
         dataset_configs = {
