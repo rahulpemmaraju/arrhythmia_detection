@@ -37,7 +37,7 @@ class ECGWaveformDataset(Dataset):
         label = torch.tensor(sample.label, dtype=torch.long).repeat(waveform.shape)
 
         if self.binary:
-            label = torch.tensor(label > 0, dtype=torch.float32)
+            label = (label > 0).float()
 
         if self.out_size is not None:
             t_old = np.linspace(0, 1, len(waveform))

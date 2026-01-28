@@ -8,6 +8,7 @@ import os
 import random
 import numpy as np
 import pandas as pd
+from sklearn.metrics import roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
 from models import ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, TwoLayer_MultiscaleSNN, TwoLayer_GatedSNN, TwoLayer_HGSNN, TwoLayer_SNN, OneLayer_SNN
@@ -50,6 +51,9 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device):
     model.eval()
     test_loss = 0
 
+    y_true = []
+    y_pred = []
+
     with torch.no_grad():
         for data, target in test_loader:
             data = encoder.encode(data)
@@ -60,13 +64,21 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device):
             
             loss = loss_fn(output, target)
 
+            y_true.append(target[:, 0].cpu().numpy())
+            y_pred.append(output.cpu().numpy())
+
             test_loss += loss.item() * data.shape[0]
 
     test_loss /= len(test_loader.dataset)
 
-    print('\nTest set: Average loss: {:.4f}\n'.format(test_loss))
+    y_true = np.concatenate(y_true, axis=0)
+    y_pred = np.concatenate(y_pred, axis=0)
 
-    return test_loss
+    auc = roc_auc_score(y_true, y_pred)
+
+    print('\nTest set: Average loss: {:.4f}, AUC: {:.4f}\n'.format(test_loss, auc))
+
+    return test_loss, auc
 
 def train_model(
         model, 
@@ -109,8 +121,9 @@ def train_model(
 
     os.makedirs(log_folder, exist_ok=True)
 
-    # save best model (based on validation loss)
+    # save best model (based on validation auc)
     min_val_loss = np.inf
+    max_val_auc = 0
 
     for epoch in range(num_epochs):
         train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device)
@@ -119,10 +132,10 @@ def train_model(
         print('Epoch {} Average Loss: {}'.format(epoch, train_loss))
 
         if (epoch + 1) % val_steps == 0:
-            val_loss = evaluate_model(model, val_loader, encoder, loss_fn, device)
+            val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
             val_losses.append((epoch, val_loss))
 
-            if val_loss < min_val_loss:
+            if max_val_auc < val_auc:
                 # save model and optimizer in case we want to restart from last known point
                 checkpoint = { 
                     'epoch': epoch,
@@ -132,7 +145,7 @@ def train_model(
                 torch.save(checkpoint, model_path)
 
                 print('New best model found! Saving weights.\n')
-                min_val_loss = val_loss
+                max_val_auc = val_auc
 
         if (epoch + 1) % logging_configs['log_steps'] == 0:
             log_model(train_losses, val_losses, log_folder)

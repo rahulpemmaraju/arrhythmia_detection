@@ -1,12 +1,12 @@
 bounds:
   alpha_0:
-  - 0.
+  - 0.001
   - 1.
   threshold_0:
   - 0.5
   - 2.
   alpha_out:
-  - 0.
+  - 0.001
   - 1.
   threshold_out:
   - 0.5
@@ -23,9 +23,9 @@ stages:
   get_objectives: get_objectives
 
 optimization_title: onelayer_snn_lif
-param_gen: OptunaOptimizer
-param_gen_kwargs:
-    sampler: TPESampler
+objective_names:
+    - avg_val_loss
+    - avg_val_auc
 
 x0:
   alpha_0: 0.5
@@ -35,7 +35,7 @@ x0:
   lr: 0.001
 
 kwargs:
-  num_seeds: 5
+  num_seeds: 2
   model_type: one_layer_snn
   recurrent_dims:
   - 128
@@ -54,5 +54,8 @@ kwargs:
   eval_batch_size: 128
   num_epochs: 2
   val_steps: 1
-  optimizer: adamw
+  optimizer: sgd
 
+
+# for cluster: mpirun -n 6 python -m mpi4py.futures -m nested.optimize --framework=mpi --config-file-path=nested_configs/onelayer_snn_128_lif_config.yaml --disp --pop_size=200 --max_iter=502 --path_length=3
+# for testing: mpirun -n 6 python -m mpi4py.futures -m nested.optimize --framework=mpi --config-file-path=nested_configs/onelayer_snn_128_lif_config.yaml --disp --pop_size=1 --max_iter=2 --path_length=1

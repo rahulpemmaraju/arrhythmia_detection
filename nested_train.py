@@ -8,6 +8,7 @@ import os
 import random
 import numpy as np
 import pandas as pd
+from sklearn.metrics import roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
 
@@ -173,6 +174,9 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device):
     model.eval()
     test_loss = 0
 
+    y_true = []
+    y_pred = []
+
     with torch.no_grad():
         for data, target in test_loader:
             data = encoder.encode(data)
@@ -183,11 +187,19 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device):
             
             loss = loss_fn(output, target)
 
+            y_true.append(target[:, 0].cpu().numpy())
+            y_pred.append(output.sum(1).cpu().numpy())
+
             test_loss += loss.item() * data.shape[0]
 
     test_loss /= len(test_loader.dataset)
 
-    return test_loss
+    y_true = np.concatenate(y_true, axis=0)
+    y_pred = np.concatenate(y_pred, axis=0)
+
+    test_auc = roc_auc_score(y_true, y_pred)
+
+    return test_loss, test_auc
 
 def get_random_seeds():
     return [list(range(context.num_seeds))]
@@ -227,24 +239,26 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
     elif context.optimizer == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=param_vals['lr'])
 
-
-    # return best model loss
-    min_val_loss = np.inf
-
     for epoch in range(context.num_epochs):
-        train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, device)
+        train_step(model, train_loader, encoder, optimizer, loss_fn, device)
+    
+    val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
 
-        if (epoch + 1) % context.val_steps == 0:
-            val_loss = evaluate_model(model, val_loader, encoder, loss_fn, device)
-
-            if val_loss < min_val_loss:
-                min_val_loss = val_loss
-
-    return {'min_val_loss': min_val_loss}
+    return {'val_loss': val_loss, 'val_auc': 1 - val_auc} # return auc as a negative value (to optimize)
 
 def combine_losses(primitives, current_features, model_id=None, export=False, plot=False):
-    avg_loss = sum([p['min_val_loss'] for p in primitives]) / len(primitives)
-    return {'avg_min_val_loss': avg_loss}
+
+    avg_loss = 0
+    avg_auc = 0
+
+    for p in primitives:
+        avg_loss += p['val_loss']
+        avg_auc += p['val_auc']
+    
+    avg_loss /= len(primitives)
+    avg_auc /= len(primitives)
+
+    return {'avg_val_loss': avg_loss, 'avg_val_auc': avg_auc}
 
 def get_objectives(features, model_id=None, export=False, plot=False):
     return features, features
