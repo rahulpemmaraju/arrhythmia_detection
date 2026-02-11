@@ -1,34 +1,34 @@
 bounds:
   alpha_0:
-  - 0.
+  - 0.001
   - 1.
   beta_0:
-  - 0.
+  - 0.001
   - 1.
   rho_0:
-  - 0.
+  - 0.001
   - 1.
   threshold_0:
   - 0.5
-  - 2.
+  - 3.
   alpha_1:
-  - 0.
+  - 0.001
   - 1.
   beta_1:
-  - 0.
+  - 0.001
   - 1.
   rho_1:
-  - 0.
+  - 0.001
   - 1.
   threshold_1:
   - 0.5
-  - 2.
+  - 3.
   alpha_out:
-  - 0.
+  - 0.001
   - 1.
   threshold_out:
   - 0.5
-  - 2.
+  - 3.
   lr:
   - 0.00001
   - 0.1
@@ -41,9 +41,9 @@ stages:
   get_objectives: get_objectives
 
 optimization_title: two_layer_snn_alif
-param_gen: OptunaOptimizer
-param_gen_kwargs:
-    sampler: TPESampler
+objective_names:
+    - avg_val_loss
+    - avg_val_auc
 
 x0:
   alpha_0: 0.5
@@ -66,10 +66,10 @@ kwargs:
   - 64
   neuron_type: alif
   out_type: lif
-  bias: True
+  bias: False
   dataset_configs:
-    data_file: "/Users/rahul/Documents/Milstein_lab/arrhythmia_detection/beat_neurokit_1.hdf5"
-    metadata: "/Users/rahul/Documents/Milstein_lab/arrhythmia_detection/beat_neurokit_1.csv"
+    data_file: "/scratch2/11354/rahulpemmaraju/arr_files/beat_neurokit_1.hdf5"
+    metadata: "/scratch2/11354/rahulpemmaraju/arr_files/beat_neurokit_1.csv"
     train_prop: 0.6
     val_prop: 0.2
     test_prop: 0.2
@@ -77,7 +77,6 @@ kwargs:
     fourier: false
   train_batch_size: 64
   eval_batch_size: 128
-  num_epochs: 2
-  val_steps: 1
-  optimizer: adamw
+  num_epochs: 10
+  optimizer: sgd
 
