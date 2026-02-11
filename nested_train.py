@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import snntorch.surrogate as surrogate
 
 import os
+import time
 import random
 import numpy as np
 import pandas as pd
@@ -206,6 +207,8 @@ def get_random_seeds():
 
 def train_model(parameters, seed, model_id=None, export=False, plot=False):
 
+    start = time.time()
+
     # set seeds and device #
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -243,6 +246,10 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
         train_step(model, train_loader, encoder, optimizer, loss_fn, device)
     
     val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
+
+    end = time.time()
+    print('Time Elapsed: {:.2f} minutes'.format((end - start) / 60))
+
 
     return {'val_loss': val_loss, 'val_auc': 1 - val_auc} # return auc as a negative value (to optimize)
 

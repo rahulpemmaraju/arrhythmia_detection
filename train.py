@@ -65,7 +65,7 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device):
             loss = loss_fn(output, target)
 
             y_true.append(target[:, 0].cpu().numpy())
-            y_pred.append(output.cpu().numpy())
+            y_pred.append(output.sum(1).cpu().numpy())
 
             test_loss += loss.item() * data.shape[0]
 
@@ -73,6 +73,7 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device):
 
     y_true = np.concatenate(y_true, axis=0)
     y_pred = np.concatenate(y_pred, axis=0)
+
 
     auc = roc_auc_score(y_true, y_pred)
 
@@ -121,10 +122,6 @@ def train_model(
 
     os.makedirs(log_folder, exist_ok=True)
 
-    # save best model (based on validation auc)
-    min_val_loss = np.inf
-    max_val_auc = 0
-
     for epoch in range(num_epochs):
         train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device)
         train_losses.append((epoch, train_loss))
@@ -134,27 +131,21 @@ def train_model(
         if (epoch + 1) % val_steps == 0:
             val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
             val_losses.append((epoch, val_loss))
-
-            if max_val_auc < val_auc:
-                # save model and optimizer in case we want to restart from last known point
-                checkpoint = { 
-                    'epoch': epoch,
-                    'model': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                }
-                torch.save(checkpoint, model_path)
-
-                print('New best model found! Saving weights.\n')
-                max_val_auc = val_auc
-
-        if (epoch + 1) % logging_configs['log_steps'] == 0:
             log_model(train_losses, val_losses, log_folder)
+
+    checkpoint = { 
+        'epoch': epoch,
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+    }
+    
+    torch.save(checkpoint, model_path)
 
     return train_losses, val_losses    
 
 if __name__ == '__main__':
 
-    for seed in [0, 1, 2, 3, 42]:
+    for seed in [0, 1, 2, 3, 4]:
 
         device = 'cpu'
         random.seed(seed)
@@ -169,19 +160,19 @@ if __name__ == '__main__':
         else:
             out_dims = 5
 
+        learning_rate = 0.009087948775014393
+        num_epochs = 20
 
-        model_name = f's_{seed}_alif_threelayer_hsnn_binary_current_balanced_spikeout'
+        model_name = f's_{seed}_optimized_sgd_lif_128'
         model_configs = {
             'in_dims': 1,
             'out_dims': out_dims,
-            'recurrent_dims': [32, 64, out_dims], # FOR ONE LAYER: [128], FOR TWO/THREE LAYER: [32, 64], FOR THREE LAYER: [32, 64, out_dim]
+            'recurrent_dims': [128], # FOR ONE LAYER: [128], FOR TWO/THREE LAYER: [32, 64], FOR THREE LAYER: [32, 64, out_dim]
             'out_act': 'none',
             'out_act_kwargs': {},
             'neuron_options': {
-                'alpha': 0.9,
-                'beta': 0.1,
-                'rho': 0.1,
-                'threshold': 1.0,
+                'alpha': 0.12398617840517072,
+                'threshold': 1.9900075811047326,
                 'spike_grad': surrogate.atan(alpha=2), 
                 'linear_options':{
                     'learning_rule': 'oja',
@@ -189,13 +180,11 @@ if __name__ == '__main__':
                     'bias': True
                 }
             },
-            'neuron_type': 'alif',
-            'out_type': 'alif',
+            'neuron_type': 'lif',
+            'out_type': 'lif',
             'out_options': {
-                'alpha': 0.9,
-                'beta': 0.1,
-                'rho': 0.1,
-                'threshold': 1.0,
+                'alpha': 0.7340683897099781,
+                'threshold': 0.5024149521837443,
                 'spike_grad': surrogate.atan(alpha=2), 
                 'linear_options':{
                     'learning_rule': 'oja',
@@ -205,7 +194,7 @@ if __name__ == '__main__':
             },
         }
 
-        model = ThreeLayer_HierarchicalSNN(**model_configs)
+        model = OneLayer_SNN(**model_configs)
 
         # --- Create Datasets/DataLoaders --- #
         dataset_configs = {
@@ -242,16 +231,14 @@ if __name__ == '__main__':
         timesteps = 20
         encoder = Current_Encoder(train_mean, train_std)
 
-        learning_rate = 5e-4
-        optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate)
 
         if binary:
             loss_fn = nn.BCEWithLogitsLoss() # higher pos_weight -> correct positive prediction is more important 
         else:
             loss_fn = nn.CrossEntropyLoss()
 
-        num_epochs = 5
-        val_steps = 1
+        val_steps = 5
 
         print('Training Model')
 

@@ -35,7 +35,7 @@ x0:
   lr: 0.001
 
 kwargs:
-  num_seeds: 2
+  num_seeds: 1
   model_type: one_layer_snn
   recurrent_dims:
   - 128
@@ -52,7 +52,7 @@ kwargs:
     fourier: false
   train_batch_size: 64
   eval_batch_size: 128
-  num_epochs: 2
+  num_epochs: 20
   val_steps: 1
   optimizer: sgd
 
