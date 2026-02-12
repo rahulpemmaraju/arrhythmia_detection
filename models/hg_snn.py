@@ -241,7 +241,7 @@ class TwoLayer_HGSNN(nn.Module):
             recurrent_dims: List[int],
             out_act: str = 'none',
             out_act_kwargs: dict = {},
-            neuron_options: dict | List[dict] = {
+            neuron_options: Union[dict, List[dict]] = {
                 'beta': 0.9,
                 'threshold': 1.0,
                 'spike_grad': surrogate.atan(alpha=2), 

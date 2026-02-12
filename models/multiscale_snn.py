@@ -348,7 +348,7 @@ class TwoLayer_MultiscaleSNN(nn.Module):
             recurrent_dims: List[int],
             out_act: str = 'none',
             out_act_kwargs: dict = {},
-            neuron_options: dict | List[dict] = {
+            neuron_options: Union[dict, List[dict]] = {
                 'alpha': 0.9,
                 'threshold': 1.0,
                 'spike_grad': surrogate.atan(alpha=2), 
@@ -499,7 +499,7 @@ class ThreeLayer_MultiscaleSNN(nn.Module):
             recurrent_dims: List[int],
             out_act: str = 'none', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
             out_act_kwargs: dict = {}, # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
-            neuron_options: dict | List[dict] = {
+            neuron_options: Union[dict, List[dict]] = {
                 'alpha': 0.9,
                 'threshold': 1.0,
                 'spike_grad': surrogate.atan(alpha=2), 
