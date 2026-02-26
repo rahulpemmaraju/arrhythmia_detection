@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import snntorch.surrogate as surrogate
 
 import os
+import sys
 import random
 import numpy as np
 import pandas as pd
@@ -39,7 +40,8 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device):
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, (batch_idx + 1) * len(data), len(train_loader.dataset),
                 100. * (batch_idx + 1) / len(train_loader), loss.item()))
-        
+        sys.stdout.flush()
+
         epoch_loss += loss.item() * data.shape[0]
 
     epoch_loss /= len(train_loader.dataset)
@@ -127,6 +129,7 @@ def train_model(
         train_losses.append((epoch, train_loss))
 
         print('Epoch {} Average Loss: {}'.format(epoch, train_loss))
+        sys.stdout.flush()
 
         if (epoch + 1) % val_steps == 0:
             val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
@@ -198,8 +201,8 @@ if __name__ == '__main__':
 
         # --- Create Datasets/DataLoaders --- #
         dataset_configs = {
-            "data_file": "/Users/rahul/Documents/Milstein_lab/arrhythmia_detection/beat_neurokit_1.hdf5",
-            "metadata": "/Users/rahul/Documents/Milstein_lab/arrhythmia_detection/beat_neurokit_1.csv",
+            "data_file": "/scratch2/11354/rahulpemmaraju/arr_files/beat_neurokit_1.hdf5",
+            "metadata": "/scratch2/11354/rahulpemmaraju/arr_files/beat_neurokit_1.csv",
             "train_prop": 0.6,
             "val_prop": 0.2,
             "test_prop": 0.2,
@@ -241,7 +244,8 @@ if __name__ == '__main__':
         val_steps = 5
 
         print('Training Model')
-
+        sys.stdout.flush()
+  
         train_losses, val_losses = train_model(
             model,
             train_loader,

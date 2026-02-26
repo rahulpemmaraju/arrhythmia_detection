@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import snntorch.surrogate as surrogate
 
 import os
+import sys
 import time
 import random
 import numpy as np
@@ -244,7 +245,7 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
 
     for epoch in range(context.num_epochs):
         train_step(model, train_loader, encoder, optimizer, loss_fn, device)
-    
+
     val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
 
     end = time.time()
