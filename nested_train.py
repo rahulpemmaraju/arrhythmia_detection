@@ -163,7 +163,6 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, device):
         loss = loss_fn(output, target)
         loss.backward()
         optimizer.step()
-
         epoch_loss += loss.item() * data.shape[0]
 
     epoch_loss /= len(train_loader.dataset)
@@ -206,7 +205,6 @@ def get_random_seeds():
     return [list(range(context.num_seeds))]
 
 def train_model(parameters, seed, model_id=None, export=False, plot=False):
-
     start = time.time()
 
     # set seeds and device #
@@ -243,12 +241,24 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
         optimizer = optim.Adam(model.parameters(), lr=param_vals['lr'])
 
     for epoch in range(context.num_epochs):
+        if context.disp:
+            print('Training Seed {}, Epoch {}'.format(seed, epoch))
         train_step(model, train_loader, encoder, optimizer, loss_fn, device)
     
     val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
 
     end = time.time()
     print('Time Elapsed: {:.2f} minutes'.format((end - start) / 60))
+    print('Val Loss: {}, Val AUC: {}'.format(val_loss, val_auc))
+
+    if export == True:
+        model_path = os.path.join(context.output_dir, f's_{seed}_optimized_{context.optimization_title}.pth')
+        checkpoint = { 
+            'epoch': epoch,
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }
+        torch.save(checkpoint, model_path)
 
 
     return {'val_loss': val_loss, 'val_auc': 1 - val_auc} # return auc as a negative value (to optimize)
@@ -269,3 +279,5 @@ def combine_losses(primitives, current_features, model_id=None, export=False, pl
 
 def get_objectives(features, model_id=None, export=False, plot=False):
     return features, features
+
+# mpirun -n 6 python -m mpi4py.futures -m nested.analyze --framework=mpi --config-file-path=nested_configs/twolayer_snn_32_64_lif_config.yaml --disp --export

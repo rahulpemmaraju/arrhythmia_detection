@@ -5,13 +5,14 @@ import torch.nn.functional as F
 import snntorch.surrogate as surrogate
 
 import os
+import yaml
 import random
 import numpy as np
 import pandas as pd
 from sklearn.metrics import confusion_matrix, roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
-from models import TwoLayer_SNN, TwoLayer_HierarchicalSNN, ThreeLayer_HierarchicalSNN, TwoLayer_MultiscaleSNN, TwoLayer_GatedSNN, TwoLayer_HGSNN, OneLayer_SNN
+from models import create_model
 from utils.encoding import Rate_Encoder, Current_Encoder
 
 # get 5-fold validation model performance
@@ -79,38 +80,10 @@ if __name__ == '__main__':
     else:
         out_dims = 5
 
-    # --- Model Configs --- #
-    model_configs = {
-        'in_dims': 1,
-        'out_dims': out_dims,
-        'recurrent_dims': [128], # FOR ONE LAYER: [128], FOR TWO/THREE LAYER: [32, 64], FOR THREE LAYER: [32, 64, out_dim]
-        'out_act': 'none',
-        'out_act_kwargs': {},
-        'neuron_options': {
-            'alpha': 0.12398617840517072,
-            'threshold': 1.9900075811047326,
-            'spike_grad': surrogate.atan(alpha=2), 
-            'linear_options':{
-                'learning_rule': 'oja',
-                'learning_rate': 1e-4,
-                'bias': True
-            }
-        },
-        'neuron_type': 'lif',
-        'out_type': 'lif',
-        'out_options': {
-            'alpha': 0.7340683897099781,
-            'threshold': 0.5024149521837443,
-            'spike_grad': surrogate.atan(alpha=2), 
-            'linear_options':{
-                'learning_rule': 'oja',
-                'learning_rate': 1e-4,
-                'bias': True
-            }
-        },
-    }
 
-    model_name = 'optimized_sgd_lif_128'
+    model_name = 'optimized_sgd_twolayer_snn_lif'
+    with open('nested_configs/twolayer_snn_32_64_lif_config.yaml', 'r') as file:
+        model_configs = yaml.safe_load(file)
     model_weights = [f's_{seed}_{model_name}' for seed in random_seeds]
     weight_folder = '../train_weights'
     results_folder = '../model_results'
@@ -118,8 +91,8 @@ if __name__ == '__main__':
     os.makedirs(results_folder, exist_ok=True)
 
     results_path = os.path.join(results_folder, model_name + '.csv')
-    
-    model = OneLayer_SNN(**model_configs)
+            
+    model = create_model(model_configs)
     
 
     model_vals = []
