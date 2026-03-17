@@ -396,6 +396,144 @@ class ALIF_Bottom_Cell(nn.Module):
 
         return v_out, z_out, b_out, a_out
 
+class OneLayer_HierarchicalSNN(nn.Module):
+
+    def __init__(
+            self,
+            in_dims: int,
+            out_dims: int,
+            recurrent_dims: List[int],
+            out_act: str = 'none', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_act_kwargs: dict = {}, # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            neuron_options: Union[dict, List[dict]] = {
+                'alpha': 0.9,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
+            neuron_type: str = 'LIF',
+            out_type: str = 'linear', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_options: dict = { # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+                'bias': True,
+            }
+        ):
+
+        '''
+        in_dims: input dimensions
+        out_dims: output dimensions
+        recurrent_dimensions: list of length two with output dimensions of recurrent layers
+        neuron_options: kwargs to pass to SNN_Cell
+        '''
+
+        super(OneLayer_HierarchicalSNN, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.recurrent_dims = recurrent_dims
+        self.out_type = out_type
+
+        if isinstance(neuron_options, dict):
+            neuron_options = [neuron_options, neuron_options]
+
+        if neuron_type in ['ALIF', 'alif']:
+            self.neuron_type = 'alif'
+            self.bottom_cell = ALIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
+            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[1])
+        else:
+            self.neuron_type = 'lif'
+            self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
+            self.top_cell = LIF_Top_Cell(self.recurrent_dims[0], self.out_dims, **neuron_options[1])
+
+    def _forward_lif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+        b_1 = torch.zeros(B, 1)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.top_cell(z_0, b_0, v_1, z_1)
+
+            outputs.append(z_1.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_1, [torch.stack(b_0s, 1), torch.stack(b_1s, 1)]
+
+        return outputs, z_1
+    
+    def _forward_alif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
+        a_0 = torch.zeros(B, self.recurrent_dims[0])
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+        b_1 = torch.zeros(B, 1)
+        a_1 = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.top_cell(z_0, b_0, v_1, z_1, a_1)
+
+            outputs.append(z_1.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_1, [torch.stack(b_0s, 1), torch.stack(b_1s, 1)]
+
+        return outputs, z_1
+
+    
+    def forward(self, x, logging=False):
+        if self.neuron_type == 'lif':
+            return self._forward_lif(x, logging)
+        else:
+            return self._forward_alif(x, logging)
 
 # Basic 2-Layer SNN with separate spiking head
 class TwoLayer_HierarchicalSNN(nn.Module):
@@ -607,10 +745,15 @@ class ThreeLayer_HierarchicalSNN(nn.Module):
             self.middle_cell = LIF_Middle_Cell(self.recurrent_dims[0], self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[1])
             self.top_cell = LIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[2])
 
-    def _forward_lif(self, x):
+    def _forward_lif(self, x, logging):
         # x shape: B x T x IN_DIMS
 
         B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+            b_2s = []
 
         v_0 = torch.zeros(B, self.recurrent_dims[0])
         z_0 = torch.zeros(B, self.recurrent_dims[0])
@@ -635,14 +778,28 @@ class ThreeLayer_HierarchicalSNN(nn.Module):
 
             outputs.append(z_2.clone())
 
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+                b_2s.append(b_2.detach().clone())
+
+
         outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_2, [torch.stack(b_0s, 1), torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
 
         return outputs, z_2
     
-    def _forward_alif(self, x):
+    def _forward_alif(self, x, logging):
         # x shape: B x T x IN_DIMS
 
         B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+            b_2s = []
 
         v_0 = torch.zeros(B, self.recurrent_dims[0])
         z_0 = torch.zeros(B, self.recurrent_dims[0])
@@ -670,35 +827,22 @@ class ThreeLayer_HierarchicalSNN(nn.Module):
 
             outputs.append(z_2.clone())
 
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+                b_2s.append(b_2.detach().clone())
+
+
         outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_2, [torch.stack(b_0s, 1), torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
 
         return outputs, z_2
 
     
-    def forward(self, x):
+    def forward(self, x, logging=False):
         if self.neuron_type == 'lif':
-            return self._forward_lif(x)
+            return self._forward_lif(x, logging)
         else:
-            return self._forward_alif(x)
-
-    
-if __name__ == '__main__':
-
-    from torchviz import make_dot, make_dot_from_trace
-
-    net = TwoLayer_HierarchicalSNN(32, 16, [48, 64], neuron_options = {
-                'alpha': 0.9,
-                'threshold': 1.0,
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{
-                    'learning_rule': 'oja',
-                    'learning_rate': 1e-4,
-                    'bias': False,
-                }
-            },)
-    x = torch.randn((3, 10, 32))
-
-    output = net(x)
-    dot = make_dot(output.mean(), params=dict(net.named_parameters()))
-    dot.render("computational_graph_two_layer_hnn", format="png", cleanup=True)
-
+            return self._forward_alif(x, logging)
