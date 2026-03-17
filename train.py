@@ -6,13 +6,14 @@ import snntorch.surrogate as surrogate
 
 import os
 import sys
+import yaml
 import random
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
-from models import ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, TwoLayer_MultiscaleSNN, TwoLayer_GatedSNN, TwoLayer_HGSNN, TwoLayer_SNN, OneLayer_SNN
+from models import create_model
 from utils.encoding import Rate_Encoder, Current_Encoder
 
 from utils.logging import log_model
@@ -79,7 +80,7 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device):
 
     auc = roc_auc_score(y_true, y_pred)
 
-    print('\nTest set: Average loss: {:.4f}, AUC: {:.4f}\n'.format(test_loss, auc))
+    print('\nValidation set: Average loss: {:.4f}, AUC: {:.4f}\n'.format(test_loss, auc))
 
     return test_loss, auc
 
@@ -150,11 +151,11 @@ if __name__ == '__main__':
 
     for seed in [0, 1, 2, 3, 4]:
 
-        device = 'cpu'
         random.seed(seed)
         os.environ['PYTHONHASHSEED'] = str(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         binary = True
 
@@ -163,41 +164,15 @@ if __name__ == '__main__':
         else:
             out_dims = 5
 
-        learning_rate = 0.009087948775014393
-        num_epochs = 20
+        num_epochs = 10
 
-        model_name = f's_{seed}_optimized_sgd_lif_128'
-        model_configs = {
-            'in_dims': 1,
-            'out_dims': out_dims,
-            'recurrent_dims': [128], # FOR ONE LAYER: [128], FOR TWO/THREE LAYER: [32, 64], FOR THREE LAYER: [32, 64, out_dim]
-            'out_act': 'none',
-            'out_act_kwargs': {},
-            'neuron_options': {
-                'alpha': 0.12398617840517072,
-                'threshold': 1.9900075811047326,
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{
-                    'learning_rule': 'oja',
-                    'learning_rate': 1e-4,
-                    'bias': True
-                }
-            },
-            'neuron_type': 'lif',
-            'out_type': 'lif',
-            'out_options': {
-                'alpha': 0.7340683897099781,
-                'threshold': 0.5024149521837443,
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{
-                    'learning_rule': 'oja',
-                    'learning_rate': 1e-4,
-                    'bias': True
-                }
-            },
-        }
-
-        model = OneLayer_SNN(**model_configs)
+        model_name = f's_{seed}_optimized_sgd_twolayer_snn_lif'
+        
+        with open('nested_configs/twolayer_snn_32_64_lif_config.yaml', 'r') as file:
+            model_configs = yaml.safe_load(file)
+        
+        model = create_model(model_configs)
+        learning_rate = model_configs['x0']['lr']
 
         # --- Create Datasets/DataLoaders --- #
         dataset_configs = {
@@ -231,17 +206,16 @@ if __name__ == '__main__':
         }
         
         # --- Train the Model --- #
-        timesteps = 20
         encoder = Current_Encoder(train_mean, train_std)
 
         optimizer = optim.SGD(model.parameters(), lr=learning_rate)
-
+    
         if binary:
-            loss_fn = nn.BCEWithLogitsLoss() # higher pos_weight -> correct positive prediction is more important 
+            loss_fn = nn.BCEWithLogitsLoss() 
         else:
             loss_fn = nn.CrossEntropyLoss()
 
-        val_steps = 5
+        val_steps = 10
 
         print('Training Model')
         sys.stdout.flush()

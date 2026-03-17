@@ -132,8 +132,9 @@ def train_test_val_split(
 
     patients = metadata_df['patient'].unique()
     train_val_patients, test_patients = train_test_split(patients, test_size=test_prop, random_state=42)
-    
+        
     train_patients, val_patients = train_test_split(train_val_patients, test_size=val_prop, random_state=random_state)
+    print(val_patients)
 
     train_df = metadata_df[metadata_df['patient'].isin(train_patients)]
     val_df = metadata_df[metadata_df['patient'].isin(val_patients)]

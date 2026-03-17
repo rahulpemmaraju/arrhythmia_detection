@@ -5,14 +5,19 @@ import torch.nn.functional as F
 import snntorch.surrogate as surrogate
 
 import os
+import yaml
 import random
 import numpy as np
 import pandas as pd
 from sklearn.metrics import confusion_matrix, roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
-from models import TwoLayer_SNN, TwoLayer_HierarchicalSNN, ThreeLayer_HierarchicalSNN, TwoLayer_MultiscaleSNN, TwoLayer_GatedSNN, TwoLayer_HGSNN, OneLayer_SNN
+from models import create_model
 from utils.encoding import Rate_Encoder, Current_Encoder
+import utils.metrics as metrics
+
+
+torch.set_num_threads(1)
 
 # get 5-fold validation model performance
 
@@ -27,9 +32,9 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
 
             if encoder is not None:
                 data = encoder.encode(data)
-
+               
             data, target = data.to(device), target.to(device)
-
+             
             output, _ = model(data)
             output = output.sum(dim=(1,2))
     
@@ -38,7 +43,7 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
 
     y_true = np.concatenate(y_true, axis=0)
     y_pred = np.concatenate(y_pred, axis=0)
-
+    print(y_true, y_pred, len(y_pred))
     auc = roc_auc_score(y_true, y_pred)
 
     y_pred = (y_pred  > threshold).astype(int)
@@ -56,6 +61,13 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
 
 
 if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config_file", type=str)
+    parser.add_argument("--model_name", type=str)
+
+    args = parser.parse_args()
 
     random_seeds = [0, 1, 2, 3, 4]
 
@@ -63,8 +75,8 @@ if __name__ == '__main__':
     binary = True
 
     dataset_configs = {
-        "data_file": "/Users/rahul/Documents/Milstein_lab/arrhythmia_detection/beat_neurokit_1.hdf5",
-        "metadata": "/Users/rahul/Documents/Milstein_lab/arrhythmia_detection/beat_neurokit_1.csv",
+        "data_file": "/scratch2/11354/rahulpemmaraju/arr_files/beat_neurokit_1.hdf5",
+        "metadata": "/scratch2/11354/rahulpemmaraju/arr_files/beat_neurokit_1.csv",
         "train_prop": 0.6,
         "val_prop": 0.2,
         "test_prop": 0.2,
@@ -79,47 +91,19 @@ if __name__ == '__main__':
     else:
         out_dims = 5
 
-    # --- Model Configs --- #
-    model_configs = {
-        'in_dims': 1,
-        'out_dims': out_dims,
-        'recurrent_dims': [128], # FOR ONE LAYER: [128], FOR TWO/THREE LAYER: [32, 64], FOR THREE LAYER: [32, 64, out_dim]
-        'out_act': 'none',
-        'out_act_kwargs': {},
-        'neuron_options': {
-            'alpha': 0.12398617840517072,
-            'threshold': 1.9900075811047326,
-            'spike_grad': surrogate.atan(alpha=2), 
-            'linear_options':{
-                'learning_rule': 'oja',
-                'learning_rate': 1e-4,
-                'bias': True
-            }
-        },
-        'neuron_type': 'lif',
-        'out_type': 'lif',
-        'out_options': {
-            'alpha': 0.7340683897099781,
-            'threshold': 0.5024149521837443,
-            'spike_grad': surrogate.atan(alpha=2), 
-            'linear_options':{
-                'learning_rule': 'oja',
-                'learning_rate': 1e-4,
-                'bias': True
-            }
-        },
-    }
 
-    model_name = 'optimized_sgd_lif_128'
+    model_name = args.model_name
+    with open(args.config_file, 'r') as file:
+        model_configs = yaml.safe_load(file)
     model_weights = [f's_{seed}_{model_name}' for seed in random_seeds]
-    weight_folder = '../train_weights'
-    results_folder = '../model_results'
+    weight_folder = '/scratch2/11354/rahulpemmaraju/arr_files/model_weights'
+    results_folder = '/scratch2/11354/rahulpemmaraju/arr_files/model_results'
 
     os.makedirs(results_folder, exist_ok=True)
 
     results_path = os.path.join(results_folder, model_name + '.csv')
-    
-    model = OneLayer_SNN(**model_configs)
+            
+    model = create_model(model_configs)
     
 
     model_vals = []
@@ -130,8 +114,9 @@ if __name__ == '__main__':
 
         dataset_configs['random_state'] = seed
 
-        train_dataset, _, test_dataset = train_test_val_split(**dataset_configs)
+        train_dataset, val_dataset, test_dataset = train_test_val_split(**dataset_configs)
         train_mean, train_std = get_dataset_statistics(train_dataset)
+        print(train_mean, train_std)
 
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=eval_batch_size)
         encoder = Current_Encoder(train_mean, train_std)
@@ -139,8 +124,15 @@ if __name__ == '__main__':
         model_path = os.path.join(weight_folder, model_weight) + '.pth'
         checkpoint = torch.load(model_path, weights_only=False)
         model.load_state_dict(checkpoint['model'])
-        threshold = checkpoint['threshold']
 
+        if 'threshold' not in checkpoint.keys():
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=eval_batch_size)
+            threshold = metrics.get_threshold(model, val_loader, encoder, 'cpu')
+            checkpoint['threshold'] = threshold
+            torch.save(checkpoint, model_path)
+
+        threshold = checkpoint['threshold']
+        print(threshold)
         auc, accuracy, sensitivity, specificity, ppv, npv = get_binary_metrics(model, test_loader, encoder, threshold)
 
         model_vals.append(

@@ -16,6 +16,7 @@ from dataloader import train_test_val_split, get_dataset_statistics
 
 from models import ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, ThreeLayer_MultiscaleSNN, TwoLayer_MultiscaleSNN, ThreeLayer_GatedSNN, TwoLayer_GatedSNN, TwoLayer_SNN, OneLayer_SNN
 from utils.encoding import Current_Encoder
+import utils.metrics as metrics
 
 from nested.utils import Context, param_array_to_dict
 from nested.optimize_utils import update_source_contexts
@@ -164,7 +165,6 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, device):
         loss = loss_fn(output, target)
         loss.backward()
         optimizer.step()
-
         epoch_loss += loss.item() * data.shape[0]
 
     epoch_loss /= len(train_loader.dataset)
@@ -207,7 +207,6 @@ def get_random_seeds():
     return [list(range(context.num_seeds))]
 
 def train_model(parameters, seed, model_id=None, export=False, plot=False):
-
     start = time.time()
 
     # set seeds and device #
@@ -220,7 +219,8 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
     # create model #
     param_vals = param_array_to_dict(parameters, context.param_names) # get param vals
     model = create_model(param_vals)
-
+    print(param_vals)
+    sys.stdout.flush()
     # create dataloaders #
     dataset_configs = context.dataset_configs
     dataset_configs['binary'] = True
@@ -244,12 +244,27 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
         optimizer = optim.Adam(model.parameters(), lr=param_vals['lr'])
 
     for epoch in range(context.num_epochs):
+        if context.disp:
+            print('Training Seed {}, Epoch {}'.format(seed, epoch))
+            sys.stdout.flush()
         train_step(model, train_loader, encoder, optimizer, loss_fn, device)
 
     val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
 
     end = time.time()
     print('Time Elapsed: {:.2f} minutes'.format((end - start) / 60))
+    print('Val Loss: {}, Val AUC: {}'.format(val_loss, val_auc))
+
+    if export == True:
+        model_path = os.path.join(context.output_dir, f's_{seed}_optimized_{context.model_name}.pth')
+        checkpoint = { 
+            'epoch': epoch,
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }
+        threshold = metrics.get_threshold(model, val_loader, encoder, device)
+        checkpoint['threshold'] = threshold
+        torch.save(checkpoint, model_path)
 
 
     return {'val_loss': val_loss, 'val_auc': 1 - val_auc} # return auc as a negative value (to optimize)
