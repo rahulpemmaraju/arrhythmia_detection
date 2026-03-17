@@ -35,7 +35,7 @@ middle-level neurons receive top-down and bottom-up signals to integrate both to
 z[t] = (v[t] - v_thresh) > 0
 b[t] = Sigmoid(U * z[t]) -> use soft sigmoid
 
-Multiscale LIF Layer: same thing but no gating terms
+Multiscale: Same thing but no gating
 '''
 class LIF_Top_Cell(nn.Module):
 
@@ -71,6 +71,7 @@ class LIF_Top_Cell(nn.Module):
 
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
+
 
     def forward(self, b_in, v_previous, z_previous):
 
@@ -120,6 +121,7 @@ class LIF_Middle_Cell(nn.Module):
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
+
     def forward(self, b_in, t_in, v_previous, z_previous):
 
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
@@ -168,6 +170,7 @@ class LIF_Bottom_Cell(nn.Module):
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
+
 
     def forward(self, b_in, t_in, v_previous, z_previous):
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
@@ -271,10 +274,9 @@ class ALIF_Middle_Cell(nn.Module):
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
+    def forward(self, b_in, t_in, v_previous, z_previous, b_previous, a_previous):
 
-    def forward(self, b_in, t_in, v_previous, z_previous, a_previous):
-
-        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
+        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
         v_out += self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
@@ -326,6 +328,7 @@ class ALIF_Bottom_Cell(nn.Module):
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
+
     def forward(self, b_in, t_in, v_previous, z_previous, a_previous):
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
@@ -335,8 +338,122 @@ class ALIF_Bottom_Cell(nn.Module):
         a_out = self.rho * a_previous + z_previous
         z_out = self.spike_grad(v_out - (self.threshold + self.beta * a_out))
 
+
         return v_out, z_out, a_out
 
+class OneLayer_MultiscaleSNN(nn.Module):
+
+    def __init__(
+            self,
+            in_dims: int,
+            out_dims: int,
+            recurrent_dims: List[int],
+            out_act: str = 'none', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_act_kwargs: dict = {}, # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            neuron_options: Union[dict, List[dict]] = {
+                'alpha': 0.9,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
+            neuron_type: str = 'LIF',
+            out_type: str = 'linear', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_options: dict = { # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+                'bias': True,
+            }
+        ):
+
+        '''
+        in_dims: input dimensions
+        out_dims: output dimensions
+        recurrent_dimensions: list of length two with output dimensions of recurrent layers
+        neuron_options: kwargs to pass to SNN_Cell
+        '''
+
+        super(OneLayer_MultiscaleSNN, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.recurrent_dims = recurrent_dims
+        self.out_type = out_type
+
+        if isinstance(neuron_options, dict):
+            neuron_options = [neuron_options, neuron_options]
+
+        if neuron_type in ['ALIF', 'alif']:
+            self.neuron_type = 'alif'
+            self.bottom_cell = ALIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
+            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[1])
+        else:
+            self.neuron_type = 'lif'
+            self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
+            self.top_cell = LIF_Top_Cell(self.recurrent_dims[0], self.out_dims, **neuron_options[1])
+
+    def _forward_lif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0 = self.bottom_cell(x_t, z_1, v_0, z_0) # output spikes are inputs to next layer
+            v_1, z_1 = self.top_cell(z_0, v_1, z_1)
+
+            outputs.append(z_1.clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        return outputs, z_1
+    
+    def _forward_alif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        a_0 = torch.zeros(B, self.recurrent_dims[0])
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+        a_1 = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, a_0 = self.bottom_cell(x_t, z_1, v_0, z_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, a_1 = self.top_cell(z_0, v_1, z_1, a_1)
+
+            outputs.append(z_1.clone())
+
+        outputs = torch.stack(outputs, 1)
+
+        return outputs, z_1
+
+    
+    def forward(self, x, logging=False):
+        if self.neuron_type == 'lif':
+            return self._forward_lif(x, logging)
+        else:
+            return self._forward_alif(x, logging)
 
 # Basic 2-Layer SNN with separate spiking head
 class TwoLayer_MultiscaleSNN(nn.Module):
@@ -544,7 +661,7 @@ class ThreeLayer_MultiscaleSNN(nn.Module):
             self.middle_cell = LIF_Middle_Cell(self.recurrent_dims[0], self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[1])
             self.top_cell = LIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[2])
 
-    def _forward_lif(self, x):
+    def _forward_lif(self, x, logging):
         # x shape: B x T x IN_DIMS
 
         B, T, _ = x.shape
@@ -563,7 +680,7 @@ class ThreeLayer_MultiscaleSNN(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0 = self.bottom_cell(x_t, z_1, v_0, z_0) # output spikes are inputs to next layer
+            v_0, z_0  = self.bottom_cell(x_t, z_1, v_0, z_0) # output spikes are inputs to next layer
             v_1, z_1 = self.middle_cell(z_0, z_2, v_1, z_1)
             v_2, z_2 = self.top_cell(z_1, v_2, z_2)
 
@@ -571,9 +688,10 @@ class ThreeLayer_MultiscaleSNN(nn.Module):
 
         outputs = torch.stack(outputs, 1)
 
+
         return outputs, z_2
     
-    def _forward_alif(self, x):
+    def _forward_alif(self, x, logging):
         # x shape: B x T x IN_DIMS
 
         B, T, _ = x.shape
@@ -606,9 +724,8 @@ class ThreeLayer_MultiscaleSNN(nn.Module):
         return outputs, z_2
 
     
-    def forward(self, x):
+    def forward(self, x, logging=False):
         if self.neuron_type == 'lif':
-            return self._forward_lif(x)
+            return self._forward_lif(x, logging)
         else:
-            return self._forward_alif(x)
-
+            return self._forward_alif(x, logging)
