@@ -14,7 +14,7 @@ from sklearn.metrics import roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
 
-from models import ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, ThreeLayer_MultiscaleSNN, TwoLayer_MultiscaleSNN, ThreeLayer_GatedSNN, TwoLayer_GatedSNN, TwoLayer_SNN, OneLayer_SNN
+from models import ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, OneLayer_HierarchicalSNN, ThreeLayer_MultiscaleSNN, TwoLayer_MultiscaleSNN, ThreeLayer_GatedSNN, TwoLayer_GatedSNN, TwoLayer_SNN, OneLayer_SNN
 from utils.encoding import Current_Encoder
 import utils.metrics as metrics
 
@@ -25,7 +25,6 @@ from nested.optimize_utils import update_source_contexts
 context = Context()
 
 def create_model(param_vals):
-
     if context.model_type in ['one_layer_snn']:
         neuron_options = {
             'alpha': param_vals['alpha_0'],
@@ -38,7 +37,7 @@ def create_model(param_vals):
             neuron_options['beta'] = param_vals['beta_0']
             neuron_options['rho'] = param_vals['rho_0']
     
-    elif context.model_type in ['two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
+    elif context.model_type in ['one_layer_hsnn', 'two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
         neuron_options = [
             {
                 'alpha': param_vals['alpha_0'],
@@ -94,7 +93,7 @@ def create_model(param_vals):
 
     out_options = {}
 
-    if context.model_type not in ['three_layer_hsnn', 'three_layer_gsnn', 'three_layer_msnn']:
+    if context.model_type not in ['one_layer_hsnn', 'three_layer_hsnn', 'three_layer_gsnn', 'three_layer_msnn']:
         if context.out_type == 'lif':
             out_options = {
                 'alpha': param_vals['alpha_out'],
@@ -126,6 +125,9 @@ def create_model(param_vals):
     if context.model_type == 'one_layer_snn':
         return OneLayer_SNN(**model_configs)
     
+    if context.model_type == 'one_layer_hsnn':
+        return OneLayer_HierarchicalSNN(**model_configs)
+
     if context.model_type == 'two_layer_snn':
         return TwoLayer_SNN(**model_configs)
     
