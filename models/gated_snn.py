@@ -10,7 +10,6 @@ from typing import Union, List, Dict
 from .hebbian_linear import HebbianLinearLayer
 from .vanilla_snn import LIF_Cell, ALIF_Cell
 
-
 def get_activation_fn(act_name, act_kwargs):
     if act_name == 'relu':
         return nn.ReLU(**act_kwargs)
@@ -23,14 +22,11 @@ def get_activation_fn(act_name, act_kwargs):
     
 '''
 Gated LIF Layer: see https://arxiv.org/pdf/1609.01704 for inspiration
-The idea: neurons might want to decide to simply reset their internal state
-high-level neurons always accumulate their internal state; they can be given a bottom-up signal to integrate useful low-level abstractions
-low-level neurons always integrate raw stimulus; they can be given a top-down signal to "reset" their internal state to only capture fine-grained features
-middle-level neurons receive top-down and bottom-up signals to integrate both top-down and bottom-up signals
+The idea: neurons might only share different time-scale information sparsely as needed
 
-"Top Cell": v[t] = beta * v[t-1] + W_recurrent * z[t-1] + B * z_{l-1}[t] - z[t-1] * v_thresh
-"Bottom Cell": v[t] = (1 - b_{l}[t-1]) * (beta * v[t-1] + W_recurrent * z[t-1]) + B * x[t] + T * z_{l+1}[t-1] - z[t-1] * v_thresh
-"Middle Cell": v[t] = (1 - b_{l}[t-1]) * (beta * v[t-1] + W_recurrent * z[t-1]) + B * z_{l-1}[t] + T * z_{l+1}[t-1] - z[t-1] * v_thresh
+"Top Cell": v[t] = alpha * v[t-1] + W_recurrent * z[t-1] + B * b_{l-1}[t] * z_{l-1}[t] - z[t-1] * v_thresh
+"Bottom Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * x[t] + T * b_{l+1}[t-1] * z_{l+1}[t-1] - z[t-1] * v_thresh
+"Middle Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * b_{l-1}[t] * z_{l-1}[t] + T * b_{l+1}[t-1] * z_{l+1}[t-1] - z[t-1] * v_thresh
 
 z[t] = (v[t] - v_thresh) > 0
 b[t] = Sigmoid(U * z[t]) -> use soft sigmoid
@@ -70,15 +66,26 @@ class LIF_Top_Cell(nn.Module):
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
-    def forward(self, b_in, v_previous, z_previous):
+        # spike to boundary
+        self.z_b = nn.Sequential(
+            HebbianLinearLayer(out_dims, 1, **linear_options),
+            nn.Sigmoid()
+        )
+
+        self.b_grad = surrogate.atan(alpha=2)
+
+    def forward(self, b_in, b_b, v_previous, z_previous):
 
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
-        v_out += self.b_v(b_in) # bottom-up signal
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         z_out = self.spike_grad(v_out - self.threshold)
 
-        return v_out, z_out
+        b_out = self.z_b(z_out)
+        b_out = self.b_grad(b_out - 0.5)
+
+        return v_out, z_out, b_out
     
 class LIF_Middle_Cell(nn.Module):
 
@@ -125,11 +132,11 @@ class LIF_Middle_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, t_in, v_previous, z_previous, b_previous):
+    def forward(self, b_in, b_b, t_in, t_b, v_previous, z_previous, b_previous):
 
-        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
-        v_out += self.b_v(b_in) # bottom-up signal
-        v_out += self.t_v(t_in) # top_down signal
+        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
+        v_out += t_b * self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         z_out = self.spike_grad(v_out - self.threshold)
@@ -184,10 +191,10 @@ class LIF_Bottom_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, t_in, v_previous, z_previous, b_previous):
-        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
+    def forward(self, b_in, t_in, t_b, v_previous, z_previous, b_previous):
+        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
-        v_out += self.t_v(t_in) # top_down signal
+        v_out += t_b * self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         z_out = self.spike_grad(v_out - self.threshold)
@@ -236,16 +243,27 @@ class ALIF_Top_Cell(nn.Module):
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
-    def forward(self, b_in, v_previous, z_previous, a_previous):
+        # spike to boundary
+        self.z_b = nn.Sequential(
+            HebbianLinearLayer(out_dims, 1, **linear_options),
+            nn.Sigmoid()
+        )
+
+        self.b_grad = surrogate.atan(alpha=2)
+
+    def forward(self, b_in, b_b, v_previous, z_previous, a_previous):
 
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
-        v_out += self.b_v(b_in) # bottom-up signal
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         a_out = self.rho * a_previous + z_previous
         z_out = self.spike_grad(v_out - (self.threshold + self.beta * a_out))
 
-        return v_out, z_out, a_out
+        b_out = self.z_b(z_out)
+        b_out = self.b_grad(b_out - 0.5)
+
+        return v_out, z_out, b_out, a_out
     
 class ALIF_Middle_Cell(nn.Module):
 
@@ -296,11 +314,11 @@ class ALIF_Middle_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, t_in, v_previous, z_previous, b_previous, a_previous):
+    def forward(self, b_in, b_b, t_in, t_b, v_previous, z_previous, b_previous, a_previous):
 
-        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
-        v_out += self.b_v(b_in) # bottom-up signal
-        v_out += self.t_v(t_in) # top_down signal
+        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
+        v_out += t_b * self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         a_out = self.rho * a_previous + z_previous
@@ -360,10 +378,10 @@ class ALIF_Bottom_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, t_in, v_previous, z_previous, b_previous, a_previous):
-        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
+    def forward(self, b_in, t_in, t_b, v_previous, z_previous, b_previous, a_previous):
+        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
-        v_out += self.t_v(t_in) # top_down signal
+        v_out += t_b * self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         a_out = self.rho * a_previous + z_previous
@@ -374,6 +392,144 @@ class ALIF_Bottom_Cell(nn.Module):
 
         return v_out, z_out, b_out, a_out
 
+class OneLayer_GatedSNN(nn.Module):
+
+    def __init__(
+            self,
+            in_dims: int,
+            out_dims: int,
+            recurrent_dims: List[int],
+            out_act: str = 'none', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_act_kwargs: dict = {}, # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            neuron_options: Union[dict, List[dict]] = {
+                'alpha': 0.9,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
+            neuron_type: str = 'LIF',
+            out_type: str = 'linear', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_options: dict = { # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+                'bias': True,
+            }
+        ):
+
+        '''
+        in_dims: input dimensions
+        out_dims: output dimensions
+        recurrent_dimensions: list of length two with output dimensions of recurrent layers
+        neuron_options: kwargs to pass to SNN_Cell
+        '''
+
+        super(OneLayer_GatedSNN, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.recurrent_dims = recurrent_dims
+        self.out_type = out_type
+
+        if isinstance(neuron_options, dict):
+            neuron_options = [neuron_options, neuron_options]
+
+        if neuron_type in ['ALIF', 'alif']:
+            self.neuron_type = 'alif'
+            self.bottom_cell = ALIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
+            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[1])
+        else:
+            self.neuron_type = 'lif'
+            self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
+            self.top_cell = LIF_Top_Cell(self.recurrent_dims[0], self.out_dims, **neuron_options[1])
+
+    def _forward_lif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+        b_1 = torch.zeros(B, 1)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.top_cell(z_0, b_0, v_1, z_1)
+
+            outputs.append(z_1.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_1, [torch.stack(b_0s, 1), torch.stack(b_1s, 1)]
+
+        return outputs, z_1
+    
+    def _forward_alif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
+        a_0 = torch.zeros(B, self.recurrent_dims[0])
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+        b_1 = torch.zeros(B, 1)
+        a_1 = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.top_cell(z_0, b_0, v_1, z_1, a_1)
+
+            outputs.append(z_1.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_1, [torch.stack(b_0s, 1), torch.stack(b_1s, 1)]
+
+        return outputs, z_1
+
+    
+    def forward(self, x, logging=False):
+        if self.neuron_type == 'lif':
+            return self._forward_lif(x, logging)
+        else:
+            return self._forward_alif(x, logging)
 
 # Basic 2-Layer SNN with separate spiking head
 class TwoLayer_GatedSNN(nn.Module):
@@ -451,6 +607,7 @@ class TwoLayer_GatedSNN(nn.Module):
 
         v_1 = torch.zeros(B, self.recurrent_dims[1])
         z_1 = torch.zeros(B, self.recurrent_dims[1])
+        b_1 = torch.zeros(B, 1)
 
         v_fc = torch.zeros(B, self.out_dims)
         z_fc = torch.zeros(B, self.out_dims)
@@ -462,8 +619,8 @@ class TwoLayer_GatedSNN(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, v_0, z_0, b_0) # output spikes are inputs to next layer
-            v_1, z_1 = self.top_cell(z_0, v_1, z_1)
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.top_cell(z_0, b_0, v_1, z_1)
 
             if self.out_type == 'linear':
                 output = self.fc(z_1)
@@ -492,6 +649,7 @@ class TwoLayer_GatedSNN(nn.Module):
 
         v_1 = torch.zeros(B, self.recurrent_dims[1])
         z_1 = torch.zeros(B, self.recurrent_dims[1])
+        b_1 = torch.zeros(B, 1)
         a_1 = torch.zeros(B, self.recurrent_dims[1])
 
         v_fc = torch.zeros(B, self.out_dims)
@@ -504,8 +662,8 @@ class TwoLayer_GatedSNN(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, z_1, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
-            v_1, z_1, a_1 = self.top_cell(z_0, v_1, z_1, a_1)
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.top_cell(z_0, b_0, v_1, z_1, a_1)
             
             if self.out_type == 'linear':
                 output = self.fc(z_1)
@@ -583,10 +741,15 @@ class ThreeLayer_GatedSNN(nn.Module):
             self.middle_cell = LIF_Middle_Cell(self.recurrent_dims[0], self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[1])
             self.top_cell = LIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[2])
 
-    def _forward_lif(self, x):
+    def _forward_lif(self, x, logging):
         # x shape: B x T x IN_DIMS
 
         B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+            b_2s = []
 
         v_0 = torch.zeros(B, self.recurrent_dims[0])
         z_0 = torch.zeros(B, self.recurrent_dims[0])
@@ -598,26 +761,41 @@ class ThreeLayer_GatedSNN(nn.Module):
 
         v_2 = torch.zeros(B, self.recurrent_dims[2])
         z_2 = torch.zeros(B, self.recurrent_dims[2])
+        b_2 = torch.zeros(B, 1)
 
         outputs = []
 
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, v_0, z_0, b_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1 = self.middle_cell(z_0, z_2, v_1, z_1, b_1)
-            v_2, z_2 = self.top_cell(z_1, v_2, z_2)
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.middle_cell(z_0, b_0, z_2, b_2, v_1, z_1, b_1)
+            v_2, z_2, b_2 = self.top_cell(z_1, b_1, v_2, z_2)
 
             outputs.append(z_2.clone())
 
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+                b_2s.append(b_2.detach().clone())
+
+
         outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_2, [torch.stack(b_0s, 1), torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
 
         return outputs, z_2
     
-    def _forward_alif(self, x):
+    def _forward_alif(self, x, logging):
         # x shape: B x T x IN_DIMS
 
         B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+            b_2s = []
 
         v_0 = torch.zeros(B, self.recurrent_dims[0])
         z_0 = torch.zeros(B, self.recurrent_dims[0])
@@ -631,6 +809,7 @@ class ThreeLayer_GatedSNN(nn.Module):
 
         v_2 = torch.zeros(B, self.recurrent_dims[2])
         z_2 = torch.zeros(B, self.recurrent_dims[2])
+        b_2 = torch.zeros(B, 1)
         a_2 = torch.zeros(B, self.recurrent_dims[2])
 
         outputs = []
@@ -638,20 +817,28 @@ class ThreeLayer_GatedSNN(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, z_1, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, z_2, v_1, z_1, b_1, a_1)
-            v_2, z_2, a_2 = self.top_cell(z_1, v_2, z_2, a_2)
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, b_0, z_2, b_2, v_1, z_1, b_1, a_1)
+            v_2, z_2, b_2, a_2 = self.top_cell(z_1, b_1, v_2, z_2, a_2)
 
             outputs.append(z_2.clone())
 
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+                b_2s.append(b_2.detach().clone())
+
+
         outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_2, [torch.stack(b_0s, 1), torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
 
         return outputs, z_2
 
     
-    def forward(self, x):
+    def forward(self, x, logging=False):
         if self.neuron_type == 'lif':
-            return self._forward_lif(x)
+            return self._forward_lif(x, logging)
         else:
-            return self._forward_alif(x)
-
+            return self._forward_alif(x, logging)
