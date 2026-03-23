@@ -14,7 +14,7 @@ from sklearn.metrics import roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
 
-from models import OneLayer_MultiscaleSNN, OneLayer_GatedSNN, OneLayer_HierarchicalSNN, ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, ThreeLayer_MultiscaleSNN, TwoLayer_MultiscaleSNN, ThreeLayer_GatedSNN, TwoLayer_GatedSNN, TwoLayer_SNN, OneLayer_SNN
+from models import OneLayer_MultiscaleSNN, OneLayer_GatedSNN, OneLayer_HierarchicalSNN, ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, ThreeLayer_MultiscaleSNN, TwoLayer_MultiscaleSNN, ThreeLayer_GatedSNN, TwoLayer_GatedSNN, TwoLayer_SNN, OneLayer_SNN, TwoLayer_EpropHierarchicalSNN, ThreeLayer_EpropHierarchicalSNN
 from utils.encoding import Current_Encoder
 import utils.metrics as metrics
 
@@ -37,7 +37,7 @@ def create_model(param_vals):
             neuron_options['beta'] = param_vals['beta_0']
             neuron_options['rho'] = param_vals['rho_0']
     
-    elif context.model_type in ['one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
+    elif context.model_type in ['two_layer_ehsnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
         neuron_options = [
             {
                 'alpha': param_vals['alpha_0'],
@@ -59,7 +59,7 @@ def create_model(param_vals):
             neuron_options[1]['beta'] = param_vals['beta_1']
             neuron_options[1]['rho'] = param_vals['rho_1']
 
-    elif context.model_type in ['three_layer_hsnn', 'three_layer_msnn', 'three_layer_gsnn']:
+    elif context.model_type in ['three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_msnn', 'three_layer_gsnn']:
         neuron_options = [
             {
                 'alpha': param_vals['alpha_0'],
@@ -93,7 +93,7 @@ def create_model(param_vals):
 
     out_options = {}
 
-    if context.model_type not in ['three_layer_hsnn', 'three_layer_gsnn', 'three_layer_msnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn']:
+    if context.model_type not in ['three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_gsnn', 'three_layer_msnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_ehsnn']:
         if context.out_type == 'lif':
             out_options = {
                 'alpha': param_vals['alpha_out'],
@@ -134,6 +134,9 @@ def create_model(param_vals):
     if context.model_type == 'one_layer_msnn':
         return OneLayer_MultiscaleSNN(**model_configs)
 
+    if context.model_type == 'two_layer_ehsnn':
+        return TwoLayer_EpropHierarchicalSNN(**model_configs)
+
     if context.model_type == 'two_layer_snn':
         return TwoLayer_SNN(**model_configs)
     
@@ -148,6 +151,9 @@ def create_model(param_vals):
     
     if context.model_type == 'three_layer_hsnn':
         return ThreeLayer_HierarchicalSNN(**model_configs)
+    
+    if context.model_type == 'three_layer_ehsnn':
+        return ThreeLayer_EpropHierarchicalSNN(**model_configs)
     
     if context.model_type == 'three_layer_msnn':
         return ThreeLayer_MultiscaleSNN(**model_configs)
