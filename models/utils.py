@@ -5,6 +5,7 @@ from .vanilla_snn import TwoLayer_SNN, OneLayer_SNN
 from .multiscale_snn import TwoLayer_MultiscaleSNN, ThreeLayer_MultiscaleSNN, OneLayer_MultiscaleSNN
 from .gated_snn import TwoLayer_GatedSNN, ThreeLayer_GatedSNN, OneLayer_GatedSNN
 from .hg_snn import TwoLayer_HGSNN
+from .eprop_hsnn import TwoLayer_EpropHierarchicalSNN, ThreeLayer_EpropHierarchicalSNN
 
 def create_model(model_configs):
     if model_configs['kwargs']['model_type'] in ['one_layer_snn']:
@@ -19,7 +20,7 @@ def create_model(model_configs):
             neuron_options['beta'] = model_configs['x0']['beta_0']
             neuron_options['rho'] = model_configs['x0']['rho_0']
     
-    elif model_configs['kwargs']['model_type'] in ['one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
+    elif model_configs['kwargs']['model_type'] in ['two_layer_ehsnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
         neuron_options = [
             {
                 'alpha': model_configs['x0']['alpha_0'],
@@ -41,7 +42,7 @@ def create_model(model_configs):
             neuron_options[1]['beta'] = model_configs['x0']['beta_1']
             neuron_options[1]['rho'] = model_configs['x0']['rho_1']
 
-    elif model_configs['kwargs']['model_type'] in ['three_layer_hsnn', 'three_layer_msnn', 'three_layer_gsnn']:
+    elif model_configs['kwargs']['model_type'] in ['three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_msnn', 'three_layer_gsnn']:
         neuron_options = [
             {
                 'alpha': model_configs['x0']['alpha_0'],
@@ -75,7 +76,7 @@ def create_model(model_configs):
 
     out_options = {}
 
-    if model_configs['kwargs']['model_type'] not in ['three_layer_hsnn', 'three_layer_gsnn', 'three_layer_msnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn']:
+    if model_configs['kwargs']['model_type'] not in ['three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_gsnn', 'three_layer_msnn', 'two_layer_ehsnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn']:
         if model_configs['kwargs']['out_type'] == 'lif':
             out_options = {
                 'alpha': model_configs['x0']['alpha_out'],
@@ -112,7 +113,10 @@ def create_model(model_configs):
 
     if model_configs['kwargs']['model_type'] == 'one_layer_hsnn':
         return OneLayer_HierarchicalSNN(**model_params)
-    
+
+    if model_configs['kwargs']['model_type'] == 'two_layer_ehsnn':
+        return TwoLayer_EpropHierarchicalSNN(**model_params)
+
     if model_configs['kwargs']['model_type'] == 'one_layer_msnn':
         return OneLayer_MultiscaleSNN(**model_params)
     
@@ -130,9 +134,36 @@ def create_model(model_configs):
     
     if model_configs['kwargs']['model_type'] == 'three_layer_hsnn':
         return ThreeLayer_HierarchicalSNN(**model_params)
-    
+
+    if model_configs['kwargs']['model_type'] == 'three_layer_ehsnn':
+        return ThreeLayer_EpropHierarchicalSNN(**model_params)
+
     if model_configs['kwargs']['model_type'] == 'three_layer_msnn':
         return ThreeLayer_MultiscaleSNN(**model_params)
     
     if model_configs['kwargs']['model_type'] == 'three_layer_gsnn':
         return ThreeLayer_GatedSNN(**model_params)
+
+if __name__ == '__main__':
+    import os
+    import torch
+    import random
+    import yaml
+    import numpy as np
+
+    seed = 0
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    with open('nested_configs/onelayer_hsnn_128_lif_config.yaml', 'r') as file:
+        model_configs = yaml.safe_load(file)
+    
+    model = create_model(model_configs)
+
+    for name, param in model.named_parameters():
+        print(f"* Name: {name}")
+        print(f"  Shape: {param.shape}")
+        print(f"  Requires Grad: {param.requires_grad}")
+        print(f"  Data: {param.data}\n")
