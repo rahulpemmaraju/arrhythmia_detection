@@ -120,6 +120,9 @@ if __name__ == '__main__':
 
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=eval_batch_size)
         encoder = Current_Encoder(train_mean, train_std)
+        
+        if not os.path.exists(os.path.join(weight_folder, model_weight) + '.pth'):
+            continue
 
         model_path = os.path.join(weight_folder, model_weight) + '.pth'
         checkpoint = torch.load(model_path, weights_only=False)

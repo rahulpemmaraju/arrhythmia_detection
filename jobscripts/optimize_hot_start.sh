@@ -10,7 +10,7 @@ sbatch <<EOT
 #SBATCH -o /scratch2/11354/rahulpemmaraju/arr_files/logs/$JOB_NAME.%j.o
 #SBATCH -e /scratch2/11354/rahulpemmaraju/arr_files/logs/$JOB_NAME.%j.e
 #SBATCH -p normal
-#SBATCH -N 18
+#SBATCH -N 27
 #SBATCH -n 1008
 #SBATCH -t 48:00:00
 #SBATCH --mail-user=rp933@rwjms.rutgers.edu
