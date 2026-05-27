@@ -43,7 +43,6 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
 
     y_true = np.concatenate(y_true, axis=0)
     y_pred = np.concatenate(y_pred, axis=0)
-    print(y_true, y_pred, len(y_pred))
     auc = roc_auc_score(y_true, y_pred)
 
     y_pred = (y_pred  > threshold).astype(int)
@@ -135,7 +134,6 @@ if __name__ == '__main__':
             torch.save(checkpoint, model_path)
 
         threshold = checkpoint['threshold']
-        print(threshold)
         auc, accuracy, sensitivity, specificity, ppv, npv = get_binary_metrics(model, test_loader, encoder, threshold)
 
         model_vals.append(

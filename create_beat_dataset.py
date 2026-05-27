@@ -1,3 +1,4 @@
+import argparse
 import os
 
 import h5py
@@ -10,7 +11,68 @@ import neurokit2 as nk
 from scipy import stats
 import scipy.signal as signal
 
-from config import ARR_DATA_DIR, NSR_DATA_DIR, BEAT_TO_ENCODING, NSR_TO_ENCODING
+from config import ARR_DATA_DIR
+
+# USE THE AAMI EC57 STANDARD: https://arxiv.org/html/2503.07276v1
+BEAT_TO_ENCODING = {
+    '!': 4,
+    '"': -1,
+    '+': -1,
+    '/': 4,
+    'A': 1,
+    'E': 2,
+    'F': 3,
+    'J': 1,
+    'L': 0,
+    'N': 0,
+    'Q': 4,
+    'R': 0,
+    'S': 1,
+    'V': 2,
+    '[': 4,
+    ']': 4,
+    'a': 1,
+    'e': 0,
+    'f': 0,
+    'j': 0,
+    'x': 4,
+    '|': -1,
+    '~': -1,
+}
+
+ARRHYTHMIA_TO_ENCODING = {
+    '(AB': 2,
+    '(AFIB': 1,
+    '(AFIB': 1,
+    '(AFL': 2,
+    '(B': 3,
+    '(BII': 5,
+    '(IVR': 3,
+    '(N': 0,
+    '(NOD': 2,
+    '(P': 4,
+    '(PREX': 4,
+    '(SBR': 0,
+    '(SVTA': 2,
+    '(T': 3,
+    '(VFL': 3,
+    '(VT': 3,
+    'MISSB': -1,
+    'PSE': -1,
+    'TS': -1, 
+    '': -1,
+}
+
+NSR_TO_ENCODING = {
+    'F': -1, 
+    'J': -1, 
+    'N': 0, 
+    'S': -1, 
+    'V': -1, 
+    '|': -1, 
+    '~': -1
+}
+
 
 '''
 this script will be used to preprocess -> slice -> label -> save ecg data
@@ -23,7 +85,6 @@ output format:
 
 '''
 
-    
 def get_windowed_data(signal_array, annotation, window_length):
     '''
     window the data around a beat
@@ -69,7 +130,7 @@ def preprocess_ecg(signal_array, method, fs):
     return nk.ecg_clean(signal_array, sampling_rate=fs, method=method)
 
 
-def process_patient(patient_path, img_folder, dataset='nsr', window_length=1, preprocessing_method='neurokit'):
+def process_patient(patient_path, window_length=1, preprocessing_method='neurokit'):
     '''
     does all the processing for a patient and returns the windowed data and metadata dict
     patient_path: path to ecg
@@ -110,51 +171,51 @@ def append_vlen(signal_arrays, h5file):
         for i, arr in enumerate(signal_arrays):
             d_arrays[n_current + i] = arr
 
-if __name__ == '__main__':
+def parse_args():
+    parser = argparse.ArgumentParser(description='Create beat datasets from ECG recordings.')
+    parser.add_argument('--raw_data_folder', type=str, help='Path to processed data files.')
+    parser.add_argument('--processed_data_folder', type=str, help='Path to processed data files.')
+    parser.add_argument('--window_length', type=float, default=1,
+                        help='Window length in seconds.')
+    parser.add_argument('--preprocessing_method', type=str, default='neurokit',
+                        help='NeuroKit preprocessing method to use.')
+    return parser.parse_args()
 
-    window_length = 1
-    preprocessing_method = 'neurokit'
 
-    dataset_name = f'beat_{preprocessing_method}_{window_length}'
+def main():
+    args = parse_args()
 
-    h5_path = os.path.join('/Users/rahul/Documents/G1/BrainInspiredComputing/TermProject', f'{dataset_name}.hdf5')
-    csv_path = os.path.join('/Users/rahul/Documents/G1/BrainInspiredComputing/TermProject', f'{dataset_name}.csv')
-    img_folder = os.path.join('/Users/rahul/Documents/G1/BrainInspiredComputing/TermProject', f'{dataset_name}')
-    os.makedirs(img_folder, exist_ok=True)
+    hdf5_path = os.path.join(args.processed_data_folder, f'data.hdf5')
+    csv_path = os.path.join(args.processed_data_folder, f'data.csv')
+
+    os.makedirs(args.processed_data_folder, exist_ok=True)
 
     metadata_dicts = []
 
-    with h5py.File(h5_path, 'w') as f:
+    with h5py.File(hdf5_path, 'w') as f:
         dt = h5py.vlen_dtype(np.dtype('float32'))
         f.create_dataset('signal_arrays', shape=(0,), maxshape=(None,), dtype=dt)
 
-    
     print('--- MIT BIH ARR DATASET --- ')
-    # arrhythmia data
-    f = open(os.path.join(ARR_DATA_DIR, 'RECORDS'))
-    arrythmia_samples = [x.strip() for x in f.readlines()]
+    with open(os.path.join(args.raw_data_folder, 'RECORDS')) as f:
+        arrythmia_samples = [x.strip() for x in f.readlines()]
 
-    arrhythmia_paths = ['{}/{}'.format(ARR_DATA_DIR, x) for x in arrythmia_samples]
+    arrhythmia_paths = ['{}/{}'.format(args.raw_data_folder, x) for x in arrythmia_samples]
 
     for path in tqdm(arrhythmia_paths):
-        patient_arrays, patient_metadata = process_patient(path, img_folder, 'arr', window_length, preprocessing_method)
+        patient_arrays, patient_metadata = process_patient(
+            path,
+            args.window_length,
+            args.preprocessing_method,
+        )
         metadata_dicts += patient_metadata
-        append_vlen(patient_arrays, h5_path)
-
-    # print('--- MIT BIH NSR DATAST --- ')
-    # # normal data
-    # f = open(os.path.join(NSR_DATA_DIR, 'RECORDS'))
-    # arrythmia_samples = [x.strip() for x in f.readlines()]
-
-    # arrhythmia_paths = ['{}/{}'.format(NSR_DATA_DIR, x) for x in arrythmia_samples]
-
-    # for path in tqdm(arrhythmia_paths):
-    #     patient_arrays, patient_metadata = process_patient(path, 'nsr', window_length, stride, preprocessing_method)
-    #     metadata_dicts += patient_metadata
-    #     append_vlen(patient_arrays, h5_name)
-    #     break
+        append_vlen(patient_arrays, hdf5_path)
 
     metadata_df = pd.DataFrame(metadata_dicts)
     metadata_df['array_index'] = metadata_df.index
 
     metadata_df.to_csv(csv_path, index=False)
+
+
+if __name__ == '__main__':
+    main()

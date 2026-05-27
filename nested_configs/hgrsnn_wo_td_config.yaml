@@ -11,6 +11,12 @@ bounds:
   threshold_1:
   - 0.5
   - 3.
+  alpha_2:
+  - 0.001
+  - 1.
+  threshold_2:
+  - 0.5
+  - 3.
   lr:
   - 0.00001
   - 0.1
@@ -22,7 +28,7 @@ stages:
   filter_features: combine_losses
   get_objectives: get_objectives
 
-optimization_title: one_layer_hsnn_lif
+optimization_title: three_layer_bsnn_lif
 objective_names:
     - avg_val_loss
     - avg_val_auc
@@ -32,13 +38,27 @@ x0:
   threshold_0: 1.0
   alpha_1: 0.5
   threshold_1: 1.0
+  alpha_2: 0.5
+  threshold_2: 1.0
   lr: 0.001
+
+xbest:
+  alpha_0: 0.052895402659987406
+  threshold_0: 1.8497160686556329
+  alpha_1: 0.8678853199449355
+  threshold_1: 1.1941659324832423
+  alpha_2: 0.8230882068348631
+  threshold_2: 0.62846785443017
+  lr: 0.04379075055052062
+
 
 kwargs:
   num_seeds: 5
-  model_type: one_layer_hsnn
+  model_type: three_layer_bsnn
   recurrent_dims:
-  - 128
+  - 32
+  - 64
+  - 1
   neuron_type: lif
   out_type: lif
   bias: False
