@@ -12,8 +12,7 @@ git clone https://github.com/rahulpemmaraju/arrhythmia_detection.git
 Create a virtual environment and install all project dependencies.
 
 ```
-pip install -r requirements.txt
-conda create --name hgrsnn python=3.11.9
+conda create --name hgrsnn python=3.12.0
 conda activate hgrsnn
 pip install -r requirements.txt
 ```

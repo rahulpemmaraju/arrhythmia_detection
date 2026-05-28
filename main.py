@@ -201,6 +201,7 @@ if __name__ == '__main__':
     parser.add_argument("--data_dir", type=str) # input data directory
     parser.add_argument("--output_dir", type=str) # output directory to store model weights/metrics csv/train plots
 
+    parser.add_argument("--num_seeds", type=int, default=5) # how many seeds to train/evaluate model for
     parser.add_argument("--train", action='store_true') # whether or not to train the model first
     parser.add_argument("--use_best_model", action='store_true') # whether or not to use the saved hyperparams from the best performing model
     
@@ -211,7 +212,7 @@ if __name__ == '__main__':
     else:
         config_key = 'x0'
 
-    seeds = [0, 1, 2, 3, 4]
+    seeds = list(range(args.num_seeds))
 
     if args.train:
         for seed in seeds:
