@@ -173,7 +173,7 @@ def append_vlen(signal_arrays, h5file):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Create beat datasets from ECG recordings.')
-    parser.add_argument('--raw_data_folder', type=str, help='Path to processed data files.')
+    parser.add_argument('--raw_data_folder', type=str, help='Path to raw data.')
     parser.add_argument('--processed_data_folder', type=str, help='Path to processed data files.')
     parser.add_argument('--window_length', type=float, default=1,
                         help='Window length in seconds.')

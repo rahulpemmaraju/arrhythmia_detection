@@ -99,10 +99,10 @@ def train_test_val_split(
         random_state=0, 
         dataset_type='waveform', 
         train_transforms=transforms.Compose([
-            transforms.RandomRotation(degrees=15),          # small random rotation
-            transforms.RandomAffine(degrees=0, translate=(0.1,0.1), scale=(0.9,1.1)),  # translate + scale
-            transforms.RandomResizedCrop(size=128, scale=(0.9, 1.0)),  # random crop + resize
-            transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),  # blur
+            transforms.RandomRotation(degrees=15),
+            transforms.RandomAffine(degrees=0, translate=(0.1,0.1), scale=(0.9,1.1)),
+            transforms.RandomResizedCrop(size=128, scale=(0.9, 1.0)),
+            transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
         ]),
         balance=False,
         **dataset_kwargs):
@@ -134,7 +134,6 @@ def train_test_val_split(
     train_val_patients, test_patients = train_test_split(patients, test_size=test_prop, random_state=42)
         
     train_patients, val_patients = train_test_split(train_val_patients, test_size=val_prop, random_state=random_state)
-    print(val_patients)
 
     train_df = metadata_df[metadata_df['patient'].isin(train_patients)]
     val_df = metadata_df[metadata_df['patient'].isin(val_patients)]

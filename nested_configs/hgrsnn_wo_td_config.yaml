@@ -51,7 +51,6 @@ xbest:
   threshold_2: 0.62846785443017
   lr: 0.04379075055052062
 
-
 kwargs:
   num_seeds: 5
   model_type: three_layer_bsnn
