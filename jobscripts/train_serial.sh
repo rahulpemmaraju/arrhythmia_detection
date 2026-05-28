@@ -5,7 +5,7 @@ export MODEL_NAME="$3"
 export DATA_DIR="$4"
 export OUTPUT_DIR="$5"
 export LABEL="$2"
-export JOB_NAME=train_"$LABEL"_"$DATE"
+export JOB_NAME="$LABEL"_"$DATE"
 sbatch <<EOT
 #!/bin/bash -l
 #SBATCH -J $JOB_NAME
@@ -14,9 +14,9 @@ sbatch <<EOT
 #SBATCH -p compute
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=64
-#SBATCH -t 2:00:00
-#SBATCH --mem=249208M
+#SBATCH --cpus-per-task=16
+#SBATCH -t 24:00:00
+#SBATCH --mem=16G
 #SBATCH --account=sua199
 #SBATCH --export=ALL
 #SBATCH --mail-user=rp933@rwjms.rutgers.edu
