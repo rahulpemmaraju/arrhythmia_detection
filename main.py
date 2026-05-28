@@ -162,6 +162,7 @@ def train_model(
     model_path = os.path.join(logging_configs['weight_folder'], logging_configs['model_name']) + '.pth'
     log_folder = os.path.join(logging_configs['log_folder'], logging_configs['model_name'])
 
+    os.makedirs(logging_configs['weight_folder'], exist_ok=True)
     os.makedirs(log_folder, exist_ok=True)
 
     for epoch in range(num_epochs):

@@ -25,4 +25,15 @@ Preprocess data for model training using the following command:
 python create_beat_dataset.py --raw_data_folder={path to raw data} --processed_data_folder={path to processed data}
 ```
 
-## Train Arrhythmia Detection Models
+## Train/Evaluate Arrhythmia Detection Models
+
+To train and evaluate full heirarchically gated RSNN, use the following method.
+
+```
+python main.py \
+--config_file=hgrsnn_config.yaml \
+--model_name=hgrsnn \
+--data_dir={path to processed data} \
+--output_dir={output path} \
+--num_seeds=5 --train --use_best_model
+```
