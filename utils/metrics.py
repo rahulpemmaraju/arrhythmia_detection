@@ -10,7 +10,7 @@ import json
 import os
 
 # use validation set to compute the threshold (point closest to 0, 1) on roc curve
-def get_threshold(model, val_loader, encoder, device='cpu'):
+def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=False):
     y_true = []
     y_pred = []
 
@@ -34,6 +34,13 @@ def get_threshold(model, val_loader, encoder, device='cpu'):
     y_pred = np.concatenate(y_pred, axis=0)
 
     fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+
+    if fix_sensitivity:
+        target_sens = 0.90
+        valid_idxs = np.where(tpr >= target_sens)[0]
+        best_idx = valid_idxs[np.argmin(fpr[valid_idxs])]
+        threshold = thresholds[best_idx]
+        return threshold
 
     points = zip(fpr, tpr)
     distances = [x[0]**2 + (1 - x[1]) ** 2 for x in points]

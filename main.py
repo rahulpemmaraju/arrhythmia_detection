@@ -306,9 +306,6 @@ if __name__ == '__main__':
             threshold = None
             if binary:
                 threshold = metrics.get_threshold(model, val_loader, encoder, device)
-                checkpoint['threshold'] = threshold
-                torch.save(checkpoint, model_path)
-
 
             accuracy = metrics.get_accuracy(model, test_loader, encoder, binary, threshold, device)
             print('\nTest Set Accuracy: {}'.format(accuracy))
@@ -354,7 +351,7 @@ if __name__ == '__main__':
 
         if 'threshold' not in checkpoint.keys():
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=eval_batch_size)
-            threshold = metrics.get_threshold(model, val_loader, encoder, 'cpu')
+            threshold = metrics.get_threshold(model, val_loader, encoder, 'cpu', True)
             checkpoint['threshold'] = threshold
             torch.save(checkpoint, model_path)
 
