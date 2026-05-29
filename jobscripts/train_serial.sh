@@ -14,9 +14,9 @@ sbatch <<EOT
 #SBATCH -p compute
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=32
 #SBATCH -t 24:00:00
-#SBATCH --mem=16G
+#SBATCH --mem=64G
 #SBATCH --account=sua199
 #SBATCH --export=ALL
 #SBATCH --mail-user=rp933@rwjms.rutgers.edu

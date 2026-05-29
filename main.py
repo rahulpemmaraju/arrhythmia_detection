@@ -20,6 +20,9 @@ from utils.encoding import Rate_Encoder, Current_Encoder
 from utils.logging import log_model
 import utils.metrics as metrics
 
+torch.set_num_threads(1)
+# get 5-fold validation model performance
+
 def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
     y_true = []
     y_pred = []
@@ -31,9 +34,9 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
 
             if encoder is not None:
                 data = encoder.encode(data)
-               
+
             data, target = data.to(device), target.to(device)
-             
+
             output, _ = model(data)
             output = output.sum(dim=(1,2))
     
@@ -224,11 +227,7 @@ if __name__ == '__main__':
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
             binary = True
-
-            if binary:
-                out_dims = 1
-            else:
-                out_dims = 5
+            out_dims = 1
 
             num_epochs = 10
 
@@ -351,14 +350,16 @@ if __name__ == '__main__':
 
     os.makedirs(results_folder, exist_ok=True)
     plots_dir = os.path.join(results_folder, 'plots')
+    metrics_dir = os.path.join(results_folder, 'metrics')
     os.makedirs(plots_dir, exist_ok=True)
+    os.makedirs(metrics_dir, exist_ok=True)
     results_path = os.path.join(results_folder, args.model_name + '.csv')
 
     model = create_model(model_configs)
 
     model_vals = []
 
-    for seed, model_weight in zip(random_seeds, model_weights):
+    for seed, model_weight in zip(seeds, model_weights):
         
         train_batch_size = 64
         eval_batch_size = 128
@@ -385,7 +386,15 @@ if __name__ == '__main__':
         torch.save(checkpoint, model_path)
 
         auc, accuracy, sensitivity, specificity, ppv, npv = get_binary_metrics(model, test_loader, encoder, threshold)
-        metrics.get_roc_curve(model, test_loader, encoder, threshold, plots_dir, 'cpu', model_weight)
+
+
+        folder_name = f'{args.model_name}_seed_{seed}'
+        if fix_sensitivity:
+            folder_name += '_fixed_sensitivity'
+
+        plot_dir = os.path.join(plots_dir, folder_name)
+        os.makedirs(plot_dir, exist_ok=True)
+        metrics.get_roc_curve(model, test_loader, encoder, threshold, plot_dir, 'cpu', model_weight)
 
         model_vals.append(
             {
