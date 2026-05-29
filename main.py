@@ -316,21 +316,50 @@ if __name__ == '__main__':
 
     # get model performance metrics
     print('Evaluating Models')
+
+    # --- Create Datasets/DataLoaders --- #
+    dataset_configs = {
+        "data_file": f"{args.data_dir}/data.hdf5",
+        "metadata": f"{args.data_dir}/data.csv",
+        "train_prop": 0.6,
+        "val_prop": 0.2,
+        "test_prop": 0.2,
+        "binary": True,
+        "random_state": 42,
+        "balance": True,
+        "fourier": False,
+    }
+
+    out_dims = 1
+
+
     with open(f'nested_configs/{args.config_file}', 'r') as file:
         model_configs = yaml.safe_load(file)
+
     model_weights = [f's_{seed}_{args.model_name}' for seed in seeds]
     weight_folder = f'{args.output_dir}/model_weights'
     results_folder = f'{args.output_dir}/model_results'
 
     os.makedirs(results_folder, exist_ok=True)
 
+    fix_sensitivity = True
+
+    metrics_path = os.path.join(results_folder, 'metrics', args.model_name + '.csv')
+
+    if fix_sensitivity:
+        metrics_path = os.path.join(results_folder, 'metrics', args.model_name + '_fixed_sensitivity.csv')
+
+    os.makedirs(results_folder, exist_ok=True)
+    plots_dir = os.path.join(results_folder, 'plots')
+    os.makedirs(plots_dir, exist_ok=True)
     results_path = os.path.join(results_folder, args.model_name + '.csv')
-            
+
     model = create_model(model_configs)
-    
+
     model_vals = []
 
-    for seed, model_weight in zip(seeds, model_weights):
+    for seed, model_weight in zip(random_seeds, model_weights):
+        
         train_batch_size = 64
         eval_batch_size = 128
 
@@ -341,22 +370,22 @@ if __name__ == '__main__':
 
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=eval_batch_size)
         encoder = Current_Encoder(train_mean, train_std)
-        
-        if not os.path.exists(os.path.join(weight_folder, model_weight) + '.pth'):
-            continue
 
         model_path = os.path.join(weight_folder, model_weight) + '.pth'
+
+        if not os.path.exists(model_path):
+            continue
+
         checkpoint = torch.load(model_path, weights_only=False)
-        model.load_state_dict(checkpoint['model'])
+        model.load_state_dict(checkpoint['model'])            
 
-        if 'threshold' not in checkpoint.keys():
-            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=eval_batch_size)
-            threshold = metrics.get_threshold(model, val_loader, encoder, 'cpu', True)
-            checkpoint['threshold'] = threshold
-            torch.save(checkpoint, model_path)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=eval_batch_size)
+        threshold = metrics.get_threshold(model, val_loader, encoder, fix_sensitivity=True)
+        checkpoint['threshold'] = threshold
+        torch.save(checkpoint, model_path)
 
-        threshold = checkpoint['threshold']
         auc, accuracy, sensitivity, specificity, ppv, npv = get_binary_metrics(model, test_loader, encoder, threshold)
+        metrics.get_roc_curve(model, test_loader, encoder, threshold, plots_dir, 'cpu', model_weight)
 
         model_vals.append(
             {
@@ -377,5 +406,4 @@ if __name__ == '__main__':
     model_df.loc["std"] = std_vals
 
     print(model_df)
-
-    model_df.to_csv(results_path, index=True)
+    model_df.to_csv(metrics_path, index=True)
