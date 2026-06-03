@@ -52,8 +52,8 @@ kwargs:
   out_type: lif
   bias: False
   dataset_configs:
-    data_file: "/scratch2/11354/rahulpemmaraju/arr_files/beat_neurokit_1.hdf5"
-    metadata: "/scratch2/11354/rahulpemmaraju/arr_files/beat_neurokit_1.csv"
+    data_file: "/expanse/lustre/scratch/rpemmaraju/temp_project/processed_beats/data.hdf5"
+    metadata: "/expanse/lustre/scratch/rpemmaraju/temp_project/processed_beats/data.csv"
     train_prop: 0.6
     val_prop: 0.2
     test_prop: 0.2
