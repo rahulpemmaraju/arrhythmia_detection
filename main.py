@@ -47,10 +47,13 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
     y_pred = np.concatenate(y_pred, axis=0)
     auc = roc_auc_score(y_true, y_pred)
 
+    # keep the raw scores so callers can build an aggregate (mean) ROC curve
+    y_score = y_pred.copy()
+
     y_pred = (y_pred  > threshold).astype(int)
-    
+
     accuracy = (y_true == y_pred).mean()
-    
+
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel().tolist()
 
     sensitivity = tp / (tp + fn + 1e-8)
@@ -58,7 +61,7 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
     ppv = tp / (tp + fp + 1e-8)
     npv = tn / (tn + fn + 1e-8)
 
-    return auc, accuracy, sensitivity, specificity, ppv, npv
+    return auc, accuracy, sensitivity, specificity, ppv, npv, y_true, y_score
 
 
 def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device):
@@ -208,6 +211,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_seeds", type=int, default=5) # how many seeds to train/evaluate model for
     parser.add_argument("--train", action='store_true') # whether or not to train the model first
     parser.add_argument("--use_best_model", action='store_true') # whether or not to use the saved hyperparams from the best performing model
+    parser.add_argument("--weight_dir", type=str, default=None) # folder of pretrained s_{seed}_{model_name}.pth weights to evaluate (defaults to {output_dir}/model_weights)
     
     args = parser.parse_args()
 
@@ -336,7 +340,8 @@ if __name__ == '__main__':
         model_configs = yaml.safe_load(file)
 
     model_weights = [f's_{seed}_{args.model_name}' for seed in seeds]
-    weight_folder = f'{args.output_dir}/model_weights'
+    # allow evaluating a separate set of pretrained weights (e.g. remote_weights/model_weights)
+    weight_folder = args.weight_dir if args.weight_dir is not None else f'{args.output_dir}/model_weights'
     results_folder = f'{args.output_dir}/model_results'
 
     os.makedirs(results_folder, exist_ok=True)
@@ -355,9 +360,10 @@ if __name__ == '__main__':
     os.makedirs(metrics_dir, exist_ok=True)
     results_path = os.path.join(results_folder, args.model_name + '.csv')
 
-    model = create_model(model_configs)
+    model = create_model(model_configs, config_key)
 
     model_vals = []
+    roc_data = []
 
     for seed, model_weight in zip(seeds, model_weights):
         
@@ -382,10 +388,14 @@ if __name__ == '__main__':
 
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=eval_batch_size)
         threshold = metrics.get_threshold(model, val_loader, encoder, fix_sensitivity=True)
-        checkpoint['threshold'] = threshold
-        torch.save(checkpoint, model_path)
 
-        auc, accuracy, sensitivity, specificity, ppv, npv = get_binary_metrics(model, test_loader, encoder, threshold)
+        # only cache the threshold back into our own weights; leave external/reference weights untouched
+        if args.weight_dir is None:
+            checkpoint['threshold'] = threshold
+            torch.save(checkpoint, model_path)
+
+        auc, accuracy, sensitivity, specificity, ppv, npv, y_true, y_score = get_binary_metrics(model, test_loader, encoder, threshold)
+        roc_data.append((y_true, y_score))
 
 
         folder_name = f'{args.model_name}_seed_{seed}'
@@ -416,3 +426,10 @@ if __name__ == '__main__':
 
     print(model_df)
     model_df.to_csv(metrics_path, index=True)
+
+    # aggregate ROC across seeds: mean curve with a shaded 95% CI band
+    mean_roc_name = args.model_name + '_mean_roc'
+    if fix_sensitivity:
+        mean_roc_name += '_fixed_sensitivity'
+    mean_roc_path = os.path.join(plots_dir, mean_roc_name)
+    metrics.plot_mean_roc_curve(roc_data, mean_roc_path)

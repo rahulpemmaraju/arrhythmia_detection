@@ -2,7 +2,8 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 
-from sklearn.metrics import roc_curve, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import roc_curve, auc, confusion_matrix, ConfusionMatrixDisplay
+from scipy import stats
 
 import torch
 
@@ -131,3 +132,98 @@ def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu',
 
     if display == True:
         plt.show()
+
+
+def plot_mean_roc_curve(roc_data, save_path, n_points=200, ci=0.95, display=False):
+    '''
+    Plot a publication-ready mean ROC curve across seeds/folds with a shaded
+    confidence-interval band.
+
+    roc_data: list of (y_true, y_score) tuples, one per seed/fold
+    save_path: full path (without extension) to save the figure; a .png (dpi=600,
+               transparent) and a vector .pdf are written for publication use
+    n_points: number of points on the common FPR grid used for interpolation
+    ci: confidence level for the shaded band (default 0.95)
+    '''
+
+    if len(roc_data) == 0:
+        print('plot_mean_roc_curve: no ROC data provided, skipping plot')
+        return
+
+    # interpolate each fold's ROC onto a shared FPR grid so they can be averaged
+    mean_fpr = np.linspace(0, 1, n_points)
+    interp_tprs = []
+    aucs = []
+
+    for y_true, y_score in roc_data:
+        fpr, tpr, _ = roc_curve(y_true, y_score)
+        interp_tpr = np.interp(mean_fpr, fpr, tpr)
+        interp_tpr[0] = 0.0  # force curve to start at the origin
+        interp_tprs.append(interp_tpr)
+        aucs.append(auc(fpr, tpr))
+
+    interp_tprs = np.stack(interp_tprs, axis=0)
+    aucs = np.asarray(aucs)
+    n_folds = interp_tprs.shape[0]
+
+    mean_tpr = interp_tprs.mean(axis=0)
+    mean_tpr[-1] = 1.0  # force curve to end at (1, 1)
+    mean_auc = aucs.mean()
+
+    # 95% confidence interval of the mean using a t-distribution (small-sample safe)
+    if n_folds > 1:
+        sem_tpr = interp_tprs.std(axis=0, ddof=1) / np.sqrt(n_folds)
+        t_crit = stats.t.ppf(0.5 + ci / 2, df=n_folds - 1)
+        band = t_crit * sem_tpr
+
+        sem_auc = aucs.std(ddof=1) / np.sqrt(n_folds)
+        auc_ci = stats.t.ppf(0.5 + ci / 2, df=n_folds - 1) * sem_auc
+        auc_label = f'Mean ROC (AUC = {mean_auc:.3f} $\\pm$ {auc_ci:.3f})'
+    else:
+        band = np.zeros_like(mean_tpr)
+        auc_label = f'ROC (AUC = {mean_auc:.3f})'
+
+    tpr_lower = np.clip(mean_tpr - band, 0, 1)
+    tpr_upper = np.clip(mean_tpr + band, 0, 1)
+
+    # --- publication-ready styling --- #
+    with plt.rc_context({
+        'font.size': 16,
+        'axes.titlesize': 20,
+        'axes.labelsize': 18,
+        'xtick.labelsize': 15,
+        'ytick.labelsize': 15,
+        'legend.fontsize': 15,
+        'axes.linewidth': 1.5,
+    }):
+        fig, ax = plt.subplots(figsize=(8, 8), dpi=600)
+
+        ax.plot(mean_fpr, mean_tpr, color='#1f4e79', lw=2.5, label=auc_label, zorder=3)
+        ax.fill_between(
+            mean_fpr, tpr_lower, tpr_upper,
+            color='#1f4e79', alpha=0.25,
+            label=f'{int(ci * 100)}% CI', zorder=2,
+        )
+        ax.plot([0, 1], [0, 1], linestyle='--', color='gray', lw=1.5,
+                label='Chance', zorder=1)
+
+        ax.set_xlim(-0.01, 1.01)
+        ax.set_ylim(-0.01, 1.01)
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title('Mean ROC Curve')
+        ax.set_aspect('equal', adjustable='box')
+        ax.legend(loc='lower right', frameon=False)
+
+        for spine in ('top', 'right'):
+            ax.spines[spine].set_visible(False)
+
+        fig.tight_layout()
+
+        fig.savefig(save_path + '.png', dpi=600, transparent=True, bbox_inches='tight')
+        fig.savefig(save_path + '.pdf', transparent=True, bbox_inches='tight')
+
+        if display:
+            plt.show()
+
+        plt.close(fig)

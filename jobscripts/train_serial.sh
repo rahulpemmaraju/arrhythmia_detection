@@ -13,10 +13,9 @@ sbatch <<EOT
 #SBATCH -e /expanse/lustre/scratch/rpemmaraju/temp_project/logs/arr_detection/$JOB_NAME.%j.e
 #SBATCH -p compute
 #SBATCH -N 1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=32
+#SBATCH -n 1
 #SBATCH -t 24:00:00
-#SBATCH --mem=64G
+#SBATCH --mem=249208M
 #SBATCH --account=sua199
 #SBATCH --export=ALL
 #SBATCH --mail-user=rp933@rwjms.rutgers.edu
