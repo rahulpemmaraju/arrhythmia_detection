@@ -1,12 +1,12 @@
 import snntorch.surrogate as surrogate
 
-from .hierarchical_snn import OneLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, ThreeLayer_HierarchicalSNN
-from .vanilla_snn import TwoLayer_SNN, OneLayer_SNN
-from .multiscale_snn import TwoLayer_MultiscaleSNN, ThreeLayer_MultiscaleSNN, OneLayer_MultiscaleSNN
-from .gated_snn import TwoLayer_GatedSNN, ThreeLayer_GatedSNN, OneLayer_GatedSNN
+from .hierarchical_snn import OneLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, ThreeLayer_HierarchicalSNN, FourLayer_HierarchicalSNN
+from .vanilla_snn import TwoLayer_SNN, OneLayer_SNN, FourLayer_SNN
+from .multiscale_snn import TwoLayer_MultiscaleSNN, ThreeLayer_MultiscaleSNN, OneLayer_MultiscaleSNN, FourLayer_MultiscaleSNN
+from .gated_snn import TwoLayer_GatedSNN, ThreeLayer_GatedSNN, OneLayer_GatedSNN, FourLayer_GatedSNN
 from .hg_snn import TwoLayer_HGSNN
-from .bsnn import TwoLayer_BSNN, ThreeLayer_BSNN
-from .eprop_hsnn import TwoLayer_EpropHierarchicalSNN, ThreeLayer_EpropHierarchicalSNN
+from .bsnn import TwoLayer_BSNN, ThreeLayer_BSNN, FourLayer_BSNN
+from .eprop_hsnn import TwoLayer_EpropHierarchicalSNN, ThreeLayer_EpropHierarchicalSNN, FourLayer_EpropHierarchicalSNN
 
 def create_model(model_configs, config_key='x0'):
     if model_configs['kwargs']['model_type'] in ['one_layer_snn']:
@@ -43,7 +43,7 @@ def create_model(model_configs, config_key='x0'):
             neuron_options[1]['beta'] = model_configs[config_key]['beta_1']
             neuron_options[1]['rho'] = model_configs[config_key]['rho_1']
 
-    elif model_configs['kwargs']['model_type'] in ['three_layer_bsnn', 'three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_msnn', 'three_layer_gsnn']:
+    elif model_configs['kwargs']['model_type'] in ['three_layer_bsnn', 'three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_msnn', 'three_layer_gsnn', 'four_layer_hsnn', 'four_layer_ehsnn', 'four_layer_gsnn', 'four_layer_bsnn', 'four_layer_msnn', 'four_layer_snn']:
         neuron_options = [
             {
                 'alpha': model_configs[config_key]['alpha_0'],
@@ -141,6 +141,24 @@ def create_model(model_configs, config_key='x0'):
     
     if model_configs['kwargs']['model_type'] == 'three_layer_hsnn':
         return ThreeLayer_HierarchicalSNN(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_snn':
+        return FourLayer_SNN(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_hsnn':
+        return FourLayer_HierarchicalSNN(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_ehsnn':
+        return FourLayer_EpropHierarchicalSNN(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_gsnn':
+        return FourLayer_GatedSNN(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_bsnn':
+        return FourLayer_BSNN(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_msnn':
+        return FourLayer_MultiscaleSNN(**model_params)
 
     if model_configs['kwargs']['model_type'] == 'three_layer_ehsnn':
         return ThreeLayer_EpropHierarchicalSNN(**model_params)

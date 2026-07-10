@@ -10,6 +10,7 @@ import math
 from typing import Union, List, Dict
 
 from .hebbian_linear import HebbianLinearLayer
+from .vanilla_snn import LIF_Cell, ALIF_Cell, get_activation_fn
 
 def init_weights(weight, in_dims, out_dims):
     k = 6 / in_dims
@@ -702,6 +703,165 @@ class ThreeLayer_EpropHierarchicalSNN(nn.Module):
         return outputs, z_2
     
     
+    def forward(self, x, logging=False):
+        return self._forward_lif(x, logging)
+
+
+class FourLayer_EpropHierarchicalSNN(nn.Module):
+
+    def __init__(
+            self,
+            in_dims: int,
+            out_dims: int,
+            recurrent_dims: List[int],
+            out_act: str = 'none',
+            out_act_kwargs: dict = {},
+            neuron_options: Union[dict, List[dict]] = {
+                'alpha': 0.9,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2),
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
+            neuron_type: str = 'LIF',
+            out_type: str = 'linear',
+            out_options: dict = {
+                'bias': True,
+            }
+        ):
+
+        '''
+        in_dims: input dimensions
+        out_dims: output dimensions
+        recurrent_dimensions: list of length three with output dimensions of recurrent layers
+        neuron_options: kwargs to pass to SNN_Cell
+        out_type: readout layer type ('linear', 'lif' or 'alif')
+        out_options: kwargs to pass to the readout layer
+        '''
+
+        super(FourLayer_EpropHierarchicalSNN, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.recurrent_dims = recurrent_dims
+        self.out_type = out_type
+
+        if isinstance(neuron_options, dict):
+            neuron_options = [neuron_options, neuron_options, neuron_options]
+
+        # the top cell emits recurrent_dims[2] features; the readout does the classification
+        self.neuron_type = 'lif'
+        self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[0])
+        self.middle_cell = LIF_Middle_Cell(self.recurrent_dims[0], self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[1])
+        self.top_cell = LIF_Top_Cell(self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[2])
+
+        if self.out_type == 'linear':
+            self.fc = nn.Sequential(
+                HebbianLinearLayer(self.recurrent_dims[2], self.out_dims, **neuron_options[-1]['linear_options']),
+                get_activation_fn(out_act, out_act_kwargs)
+            )
+
+        elif self.out_type == 'lif':
+            self.fc = LIF_Cell(self.recurrent_dims[2], self.out_dims, **out_options)
+
+        else:
+            self.fc = ALIF_Cell(self.recurrent_dims[2], self.out_dims, **out_options)
+
+    def reset_traces(self):
+        self.bottom_cell.reset_traces()
+        self.middle_cell.reset_traces()
+        self.top_cell.reset_traces()
+
+    def _readout(self, z_2, v_fc, z_fc, a_fc):
+        if self.out_type == 'linear':
+            return self.fc(z_2), v_fc, z_fc, a_fc
+        elif self.out_type == 'lif':
+            v_fc, z_fc = self.fc(z_2, v_fc, z_fc)
+            return z_fc, v_fc, z_fc, a_fc
+        else:
+            v_fc, z_fc, a_fc = self.fc(z_2, v_fc, z_fc, a_fc)
+            return z_fc, v_fc, z_fc, a_fc
+
+    def _forward_lif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+            b_2s = []
+
+        self.reset_traces() # reset etraces
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1, requires_grad=True)
+
+        v_1 = torch.zeros(B, self.recurrent_dims[1])
+        z_1 = torch.zeros(B, self.recurrent_dims[1])
+        b_1 = torch.zeros(B, 1, requires_grad=True)
+
+        v_2 = torch.zeros(B, self.recurrent_dims[2])
+        z_2 = torch.zeros(B, self.recurrent_dims[2])
+        b_2 = torch.zeros(B, 1, requires_grad=True)
+
+        v_fc = torch.zeros(B, self.out_dims)
+        z_fc = torch.zeros(B, self.out_dims)
+        a_fc = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            # compute the past time's contribution on gradient wrt to projection weights
+            if self.training:
+                b_0.register_hook(compute_dL_dg_dW_grad(self.bottom_cell.gate.projection.weight, z_0))
+                b_1.register_hook(compute_dL_dg_dW_grad(self.middle_cell.gate.projection.weight, z_1))
+                b_2.register_hook(compute_dL_dg_dW_grad(self.top_cell.gate.projection.weight, z_2))
+
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.middle_cell(z_0, b_0, z_2, b_2, v_1, z_1, b_1)
+            v_2, z_2, b_2 = self.top_cell(z_1, b_1, v_2, z_2)
+
+            output, v_fc, z_fc, a_fc = self._readout(z_2, v_fc, z_fc, a_fc)
+
+            outputs.append(output.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+                b_2s.append(b_2.detach().clone())
+
+            v_0 = v_0.detach()
+            z_0 = z_0.detach()
+            b_0 = b_0.detach().requires_grad_()
+
+            v_1 = v_1.detach()
+            z_1 = z_1.detach()
+            b_1 = b_1.detach().requires_grad_()
+
+            v_2 = v_2.detach()
+            z_2 = z_2.detach()
+            b_2 = b_2.detach().requires_grad_()
+
+            # keep the readout state truncated as well, consistent with the eprop core
+            v_fc = v_fc.detach()
+            z_fc = z_fc.detach()
+            a_fc = a_fc.detach()
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, output, [torch.stack(b_0s, 1), torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
+
+        return outputs, output
+
+
     def forward(self, x, logging=False):
         return self._forward_lif(x, logging)
 

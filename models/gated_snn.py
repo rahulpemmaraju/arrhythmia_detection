@@ -842,3 +842,194 @@ class ThreeLayer_GatedSNN(nn.Module):
             return self._forward_lif(x, logging)
         else:
             return self._forward_alif(x, logging)
+class FourLayer_GatedSNN(nn.Module):
+
+    def __init__(
+            self,
+            in_dims: int,
+            out_dims: int,
+            recurrent_dims: List[int],
+            out_act: str = 'none',
+            out_act_kwargs: dict = {},
+            neuron_options: Union[dict, List[dict]] = {
+                'alpha': 0.9,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
+            neuron_type: str = 'LIF',
+            out_type: str = 'linear',
+            out_options: dict = {
+                'bias': True,
+            }
+        ):
+
+        '''
+        in_dims: input dimensions
+        out_dims: output dimensions
+        recurrent_dimensions: list of length three with output dimensions of recurrent layers
+        neuron_options: kwargs to pass to SNN_Cell
+        out_type: readout layer type ('linear', 'lif' or 'alif')
+        out_options: kwargs to pass to the readout layer
+        '''
+
+        super(FourLayer_GatedSNN, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.recurrent_dims = recurrent_dims
+        self.out_type = out_type
+
+        if isinstance(neuron_options, dict):
+            neuron_options = [neuron_options, neuron_options, neuron_options]
+
+        # the top cell emits recurrent_dims[2] features; the readout does the classification
+        if neuron_type in ['ALIF', 'alif']:
+            self.neuron_type = 'alif'
+            self.bottom_cell = ALIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[0])
+            self.middle_cell = ALIF_Middle_Cell(self.recurrent_dims[0], self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[1])
+            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[2])
+        else:
+            self.neuron_type = 'lif'
+            self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[0])
+            self.middle_cell = LIF_Middle_Cell(self.recurrent_dims[0], self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[1])
+            self.top_cell = LIF_Top_Cell(self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[2])
+
+        if self.out_type == 'linear':
+            self.fc = nn.Sequential(
+                HebbianLinearLayer(self.recurrent_dims[2], self.out_dims, **neuron_options[-1]['linear_options']),
+                get_activation_fn(out_act, out_act_kwargs)
+            )
+
+        elif self.out_type == 'lif':
+            self.fc = LIF_Cell(self.recurrent_dims[2], self.out_dims, **out_options)
+
+        else:
+            self.fc = ALIF_Cell(self.recurrent_dims[2], self.out_dims, **out_options)
+
+    def _readout(self, z_2, v_fc, z_fc, a_fc):
+        if self.out_type == 'linear':
+            return self.fc(z_2), v_fc, z_fc, a_fc
+        elif self.out_type == 'lif':
+            v_fc, z_fc = self.fc(z_2, v_fc, z_fc)
+            return z_fc, v_fc, z_fc, a_fc
+        else:
+            v_fc, z_fc, a_fc = self.fc(z_2, v_fc, z_fc, a_fc)
+            return z_fc, v_fc, z_fc, a_fc
+
+    def _forward_lif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+            b_2s = []
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
+
+        v_1 = torch.zeros(B, self.recurrent_dims[1])
+        z_1 = torch.zeros(B, self.recurrent_dims[1])
+        b_1 = torch.zeros(B, 1)
+
+        v_2 = torch.zeros(B, self.recurrent_dims[2])
+        z_2 = torch.zeros(B, self.recurrent_dims[2])
+        b_2 = torch.zeros(B, 1)
+
+        v_fc = torch.zeros(B, self.out_dims)
+        z_fc = torch.zeros(B, self.out_dims)
+        a_fc = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.middle_cell(z_0, b_0, z_2, b_2, v_1, z_1, b_1)
+            v_2, z_2, b_2 = self.top_cell(z_1, b_1, v_2, z_2)
+
+            output, v_fc, z_fc, a_fc = self._readout(z_2, v_fc, z_fc, a_fc)
+
+            outputs.append(output.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+                b_2s.append(b_2.detach().clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, output, [torch.stack(b_0s, 1), torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
+
+        return outputs, output
+
+    def _forward_alif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+            b_1s = []
+            b_2s = []
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
+        a_0 = torch.zeros(B, self.recurrent_dims[0])
+
+        v_1 = torch.zeros(B, self.recurrent_dims[1])
+        z_1 = torch.zeros(B, self.recurrent_dims[1])
+        b_1 = torch.zeros(B, 1)
+        a_1 = torch.zeros(B, self.recurrent_dims[1])
+
+        v_2 = torch.zeros(B, self.recurrent_dims[2])
+        z_2 = torch.zeros(B, self.recurrent_dims[2])
+        b_2 = torch.zeros(B, 1)
+        a_2 = torch.zeros(B, self.recurrent_dims[2])
+
+        v_fc = torch.zeros(B, self.out_dims)
+        z_fc = torch.zeros(B, self.out_dims)
+        a_fc = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, b_0, z_2, b_2, v_1, z_1, b_1, a_1)
+            v_2, z_2, b_2, a_2 = self.top_cell(z_1, b_1, v_2, z_2, a_2)
+
+            output, v_fc, z_fc, a_fc = self._readout(z_2, v_fc, z_fc, a_fc)
+
+            outputs.append(output.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+                b_1s.append(b_1.detach().clone())
+                b_2s.append(b_2.detach().clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, output, [torch.stack(b_0s, 1), torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
+
+        return outputs, output
+
+    def forward(self, x, logging=False):
+        if self.neuron_type == 'lif':
+            return self._forward_lif(x, logging)
+        else:
+            return self._forward_alif(x, logging)

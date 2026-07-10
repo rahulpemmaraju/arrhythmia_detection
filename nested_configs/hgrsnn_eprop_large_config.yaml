@@ -1,0 +1,70 @@
+bounds:
+  alpha_0:
+  - 0.001
+  - 1.0
+  threshold_0:
+  - 0.5
+  - 3.0
+  alpha_1:
+  - 0.001
+  - 1.0
+  threshold_1:
+  - 0.5
+  - 3.0
+  alpha_2:
+  - 0.001
+  - 1.0
+  threshold_2:
+  - 0.5
+  - 3.0
+  lr:
+  - 1.0e-05
+  - 0.1
+stages:
+- source: nested_train
+  get_args_static: get_random_seeds
+  compute_features: train_model
+  filter_features: combine_losses
+  get_objectives: get_objectives
+optimization_title: four_layer_ehsnn_lif
+objective_names:
+- avg_val_loss
+- avg_val_auc
+x0:
+  alpha_0: 0.5
+  threshold_0: 1.0
+  alpha_1: 0.5
+  threshold_1: 1.0
+  alpha_2: 0.5
+  threshold_2: 1.0
+  lr: 0.001
+xbest:
+  alpha_0: 0.5
+  threshold_0: 1.0
+  alpha_1: 0.5
+  threshold_1: 1.0
+  alpha_2: 0.5
+  threshold_2: 1.0
+  lr: 0.001
+kwargs:
+  num_seeds: 5
+  model_type: four_layer_ehsnn
+  recurrent_dims:
+  - 32
+  - 32
+  - 32
+  neuron_type: lif
+  out_type: linear
+  bias: false
+  dataset_configs:
+    data_file: /expanse/lustre/scratch/rpemmaraju/temp_project/processed_beats/data.hdf5
+    metadata: /expanse/lustre/scratch/rpemmaraju/temp_project/processed_beats/data.csv
+    train_prop: 0.6
+    val_prop: 0.2
+    test_prop: 0.2
+    balance: true
+    fourier: false
+  train_batch_size: 64
+  eval_batch_size: 128
+  num_epochs: 10
+  optimizer: sgd
