@@ -14,7 +14,7 @@ from sklearn.metrics import roc_auc_score
 
 from dataloader import train_test_val_split, get_dataset_statistics
 
-from models import OneLayer_MultiscaleSNN, OneLayer_GatedSNN, OneLayer_HierarchicalSNN, ThreeLayer_HierarchicalSNN, TwoLayer_HierarchicalSNN, ThreeLayer_MultiscaleSNN, TwoLayer_MultiscaleSNN, ThreeLayer_GatedSNN, TwoLayer_GatedSNN, TwoLayer_SNN, OneLayer_SNN, TwoLayer_EpropHierarchicalSNN, ThreeLayer_EpropHierarchicalSNN, TwoLayer_BSNN, ThreeLayer_BSNN
+from models import create_model as build_model
 from utils.encoding import Current_Encoder
 import utils.metrics as metrics
 
@@ -25,147 +25,20 @@ from nested.optimize_utils import update_source_contexts
 context = Context()
 
 def create_model(param_vals):
-    if context.model_type in ['one_layer_snn']:
-        neuron_options = {
-            'alpha': param_vals['alpha_0'],
-            'threshold': param_vals['threshold_0'],
-            'spike_grad': surrogate.atan(alpha=2), 
-            'linear_options':{'bias': context.bias}
-        }
-
-        if context.neuron_type == 'alif':
-            neuron_options['beta'] = param_vals['beta_0']
-            neuron_options['rho'] = param_vals['rho_0']
-    
-    elif context.model_type in ['two_layer_bsnn', 'two_layer_ehsnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
-        neuron_options = [
-            {
-                'alpha': param_vals['alpha_0'],
-                'threshold': param_vals['threshold_0'],
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{'bias': context.bias}
-            },
-            {
-                'alpha': param_vals['alpha_1'],
-                'threshold': param_vals['threshold_1'],
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{'bias': context.bias}
-            }
-        ]
-
-        if context.neuron_type == 'alif':
-            neuron_options[0]['beta'] = param_vals['beta_0']
-            neuron_options[0]['rho'] = param_vals['rho_0']
-            neuron_options[1]['beta'] = param_vals['beta_1']
-            neuron_options[1]['rho'] = param_vals['rho_1']
-
-    elif context.model_type in ['three_layer_bsnn', 'three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_msnn', 'three_layer_gsnn']:
-        neuron_options = [
-            {
-                'alpha': param_vals['alpha_0'],
-                'threshold': param_vals['threshold_0'],
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{'bias': context.bias}
-            },
-            {
-                'alpha': param_vals['alpha_1'],
-                'threshold': param_vals['threshold_1'],
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{'bias': context.bias}
-            },
-            {
-                'alpha': param_vals['alpha_2'],
-                'threshold': param_vals['threshold_2'],
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{'bias': context.bias}
-            }
-
-        ]
-
-        if context.neuron_type == 'alif':
-            neuron_options[0]['beta'] = param_vals['beta_0']
-            neuron_options[0]['rho'] = param_vals['rho_0']
-            neuron_options[1]['beta'] = param_vals['beta_1']
-            neuron_options[1]['rho'] = param_vals['rho_1']
-            neuron_options[2]['beta'] = param_vals['beta_2']
-            neuron_options[2]['rho'] = param_vals['rho_2']
-
-
-    out_options = {}
-
-    if context.model_type not in ['three_layer_bsnn', 'three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_gsnn', 'three_layer_msnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_ehsnn', 'two_layer_bsnn']:
-        if context.out_type == 'lif':
-            out_options = {
-                'alpha': param_vals['alpha_out'],
-                'threshold': param_vals['threshold_out'],
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{'bias': context.bias}
-            }
-
-        elif context.out_type == 'alif':
-            out_options = {
-                'alpha': param_vals['alpha_out'],
-                'beta': param_vals['beta_out'],
-                'rho': param_vals['rho_out'],
-                'threshold': param_vals['threshold_out'],
-                'spike_grad': surrogate.atan(alpha=2), 
-                'linear_options':{'bias': context.bias}
-            }
-
+    # delegate to the shared builder so the optimization and train/eval paths can never
+    # disagree about how a model_type maps onto an architecture
     model_configs = {
-            'in_dims': 1,
-            'out_dims': 1,
-            'recurrent_dims': context.recurrent_dims,
-            'neuron_options': neuron_options,
+        'kwargs': {
+            'model_type': context.model_type,
             'neuron_type': context.neuron_type,
             'out_type': context.out_type,
-            'out_options': out_options,
+            'bias': context.bias,
+            'recurrent_dims': context.recurrent_dims,
+        },
+        'x0': param_vals,
     }
 
-    if context.model_type == 'one_layer_snn':
-        return OneLayer_SNN(**model_configs)
-    
-    if context.model_type == 'one_layer_hsnn':
-        return OneLayer_HierarchicalSNN(**model_configs)
-
-    if context.model_type == 'one_layer_gsnn':
-        return OneLayer_GatedSNN(**model_configs)
-
-    if context.model_type == 'one_layer_msnn':
-        return OneLayer_MultiscaleSNN(**model_configs)
-
-    if context.model_type == 'two_layer_ehsnn':
-        return TwoLayer_EpropHierarchicalSNN(**model_configs)
-
-    if context.model_type == 'two_layer_bsnn':
-        return TwoLayer_BSNN(**model_configs)
-
-    if context.model_type == 'two_layer_snn':
-        return TwoLayer_SNN(**model_configs)
-    
-    if context.model_type == 'two_layer_hsnn':
-        return TwoLayer_HierarchicalSNN(**model_configs)
-
-    if context.model_type == 'two_layer_msnn':
-        return TwoLayer_MultiscaleSNN(**model_configs)
-    
-    if context.model_type == 'two_layer_gsnn':
-        return TwoLayer_GatedSNN(**model_configs)
-    
-    if context.model_type == 'three_layer_hsnn':
-        return ThreeLayer_HierarchicalSNN(**model_configs)
-
-    if context.model_type == 'three_layer_bsnn':
-        return ThreeLayer_BSNN(**model_configs)
-
-    if context.model_type == 'three_layer_ehsnn':
-        return ThreeLayer_EpropHierarchicalSNN(**model_configs)
-    
-    if context.model_type == 'three_layer_msnn':
-        return ThreeLayer_MultiscaleSNN(**model_configs)
-    
-    if context.model_type == 'three_layer_gsnn':
-        return ThreeLayer_GatedSNN(**model_configs)
+    return build_model(model_configs, 'x0')
 
 
 def train_step(model, train_loader, encoder, optimizer, loss_fn, device):

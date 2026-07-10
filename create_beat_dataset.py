@@ -85,13 +85,14 @@ output format:
 
 '''
 
-def get_windowed_data(signal_array, annotation, window_length):
+def get_windowed_data(signal_array, annotation, window_length, fs, downsample_factor=1):
     '''
     window the data around a beat
     signal_array: cleaned ecg signal
     window_length: length of window (in seconds)
     stride: stride for windowing (in seconds)
-    fs: sampling rate of the signal
+    fs: sampling rate of the signal (after downsampling)
+    downsample_factor: factor the signal was downsampled by, used to rescale beat indices
     returns: list of windows, list of labels
     '''
 
@@ -99,14 +100,14 @@ def get_windowed_data(signal_array, annotation, window_length):
     windowed_labels = []
 
     beat_encoding = np.array([BEAT_TO_ENCODING[x] for x in annotation.symbol])
-    beat_samples = np.array(annotation.sample)
+    beat_samples = np.array(annotation.sample) // downsample_factor
     mask = np.where(beat_encoding > -1)
 
     filtered_encoding = beat_encoding[mask]
     filtered_beats = beat_samples[mask]
 
 
-    window_len = window_length * annotation.fs
+    window_len = window_length * fs
 
     for i, x in enumerate(filtered_beats):
         start = int(x - window_len // 2)
@@ -130,7 +131,20 @@ def preprocess_ecg(signal_array, method, fs):
     return nk.ecg_clean(signal_array, sampling_rate=fs, method=method)
 
 
-def process_patient(patient_path, window_length=1, preprocessing_method='neurokit'):
+def downsample_ecg(signal_array, downsample_factor):
+    '''
+    downsamples an ecg by an integer factor with an anti-aliasing filter
+    signal_array: 1D array of the ecg signal
+    downsample_factor: integer factor to downsample by
+    '''
+
+    if downsample_factor == 1:
+        return signal_array
+
+    return signal.resample_poly(signal_array, up=1, down=downsample_factor)
+
+
+def process_patient(patient_path, window_length=1, preprocessing_method='neurokit', downsample_factor=1):
     '''
     does all the processing for a patient and returns the windowed data and metadata dict
     patient_path: path to ecg
@@ -138,6 +152,7 @@ def process_patient(patient_path, window_length=1, preprocessing_method='neuroki
     window_length: segment length for segmenting the data
     stride: how far to jump (in seconds) to get the next window of data
     preprocessing_method: the neurokit preprocessing algorithm to use for the ecg
+    downsample_factor: integer factor to downsample the ecg by before preprocessing
 
     returns: list of arrays corresponding to windowed ecg and list of dicts corresponding to dataframe elements
     '''
@@ -145,12 +160,15 @@ def process_patient(patient_path, window_length=1, preprocessing_method='neuroki
     record = wfdb.rdrecord(patient_path)
     annotation = wfdb.rdann(patient_path, 'atr')
 
-    fs = record.fs
     signal_array = record.p_signal[:, 0] # only using lead 1 here
-    
+
+    signal_array = downsample_ecg(signal_array, downsample_factor)
+    fs = record.fs // downsample_factor
 
     signal_array = preprocess_ecg(signal_array, preprocessing_method, fs)
-    patient_arrays, patient_labels = get_windowed_data(signal_array, annotation, window_length)
+    patient_arrays, patient_labels = get_windowed_data(
+        signal_array, annotation, window_length, fs, downsample_factor
+    )
 
     patient_metadata = [{'patient': annotation.record_name, 'fs': fs, 'label': l}  for l in patient_labels]
 
@@ -179,7 +197,14 @@ def parse_args():
                         help='Window length in seconds.')
     parser.add_argument('--preprocessing_method', type=str, default='neurokit',
                         help='NeuroKit preprocessing method to use.')
-    return parser.parse_args()
+    parser.add_argument('--downsample_factor', type=int, default=1,
+                        help='Integer factor to downsample the ECG by (1 keeps the original rate).')
+    args = parser.parse_args()
+
+    if args.downsample_factor < 1:
+        parser.error('--downsample_factor must be a positive integer.')
+
+    return args
 
 
 def main():
@@ -207,6 +232,7 @@ def main():
             path,
             args.window_length,
             args.preprocessing_method,
+            args.downsample_factor,
         )
         metadata_dicts += patient_metadata
         append_vlen(patient_arrays, hdf5_path)
