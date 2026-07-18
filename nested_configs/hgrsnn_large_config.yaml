@@ -39,13 +39,13 @@ x0:
   threshold_2: 1.0
   lr: 0.001
 xbest:
-  alpha_0: 0.5
-  threshold_0: 1.0
-  alpha_1: 0.5
-  threshold_1: 1.0
-  alpha_2: 0.5
-  threshold_2: 1.0
-  lr: 0.001
+  alpha_0: 0.06443083627057643
+  threshold_0: 1.6489604959018722
+  alpha_1: 0.18579278401175964
+  threshold_1: 0.32837877593793796
+  alpha_2: 0.029388565936909646
+  threshold_2: 1.193004497302703
+  lr: 0.3042556166754038
 kwargs:
   num_seeds: 5
   model_type: four_layer_hsnn

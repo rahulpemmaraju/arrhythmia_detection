@@ -46,6 +46,7 @@ xbest:
   alpha_2: 0.3773176245868868
   threshold_2: 1.8460985098274003
   lr: 0.14606582162717582
+
 kwargs:
   num_seeds: 5
   model_type: four_layer_snn

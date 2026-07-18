@@ -205,6 +205,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_file", type=str) # model config (in nested_configs folder, not the full path) 
     parser.add_argument("--model_name", type=str) # desired model name (s_{seed}_{model_name} will be saved)
+    parser.add_argument("--plot_title", type=str, default=None) # display name for the ROC plot title (defaults to --model_name)
     parser.add_argument("--data_dir", type=str) # input data directory
     parser.add_argument("--output_dir", type=str) # output directory to store model weights/metrics csv/train plots
 
@@ -432,4 +433,5 @@ if __name__ == '__main__':
     if fix_sensitivity:
         mean_roc_name += '_fixed_sensitivity'
     mean_roc_path = os.path.join(plots_dir, mean_roc_name)
-    metrics.plot_mean_roc_curve(roc_data, mean_roc_path)
+    metrics.plot_mean_roc_curve(roc_data, mean_roc_path,
+                                model_name=args.plot_title or args.model_name)
