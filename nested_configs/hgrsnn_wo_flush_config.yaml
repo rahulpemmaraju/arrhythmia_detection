@@ -1,19 +1,19 @@
 bounds:
   alpha_0:
-  - 0.001
-  - 1.
+  - 0.9
+  - 0.999
   threshold_0:
   - 0.1
   - 3.
   alpha_1:
-  - 0.001
-  - 1.
+  - 0.9
+  - 0.999
   threshold_1:
   - 0.1
   - 2.
   alpha_2:
-  - 0.001
-  - 1.
+  - 0.9
+  - 0.999
   threshold_2:
   - 0.1
   - 3.
@@ -34,11 +34,11 @@ objective_names:
     - avg_val_auc
 
 x0:
-  alpha_0: 0.5
+  alpha_0: 0.99
   threshold_0: 1.0
-  alpha_1: 0.5
+  alpha_1: 0.99
   threshold_1: 1.0
-  alpha_2: 0.5
+  alpha_2: 0.99
   threshold_2: 1.0
   lr: 0.001
 

@@ -185,7 +185,8 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, 
     
     return epoch_loss
 
-def evaluate_model(model, test_loader, encoder, loss_fn, device, center_frac=1.0, binary=True):
+def evaluate_model(model, test_loader, encoder, loss_fn, device, center_frac=1.0, binary=True,
+                   split_name='Validation'):
 
     model.eval()
     test_loss = 0
@@ -220,7 +221,7 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device, center_frac=1.0
 
     auc = compute_auc(y_true, y_score, binary)
 
-    print('\nValidation set: Average loss: {:.4f}, AUC: {:.4f}\n'.format(test_loss, auc))
+    print('\n{} set: Average loss: {:.4f}, AUC: {:.4f}\n'.format(split_name, test_loss, auc))
 
     return test_loss, auc
 
@@ -266,6 +267,12 @@ def train_model(
     train_losses = []
     val_losses = []
 
+    # train AUC is logged alongside val AUC so the two can be read together:
+    # both low -> underfitting (budget/lr/capacity), train high + val low ->
+    # generalization gap. train loss alone can't tell these apart.
+    train_aucs = []
+    val_aucs = []
+
     model_path = os.path.join(logging_configs['weight_folder'], logging_configs['model_name']) + '.pth'
     log_folder = os.path.join(logging_configs['log_folder'], logging_configs['model_name'])
 
@@ -282,7 +289,18 @@ def train_model(
         if (epoch + 1) % val_steps == 0:
             val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device, center_frac, binary)
             val_losses.append((epoch, val_loss))
-            log_model(train_losses, val_losses, log_folder)
+            val_aucs.append((epoch, val_auc))
+
+            # same forward pass over the training set, in eval mode
+            _, train_auc = evaluate_model(model, train_loader, encoder, loss_fn, device, center_frac, binary,
+                                          split_name='Train')
+            train_aucs.append((epoch, train_auc))
+
+            print('Epoch {} AUC: train {:.4f} | val {:.4f} | gap {:+.4f}'.format(
+                epoch, train_auc, val_auc, train_auc - val_auc))
+            sys.stdout.flush()
+
+            log_model(train_losses, val_losses, log_folder, train_aucs, val_aucs)
 
     checkpoint = { 
         'epoch': epoch,
