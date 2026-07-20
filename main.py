@@ -10,12 +10,15 @@ import yaml
 import random
 import numpy as np
 import pandas as pd
-from sklearn.metrics import confusion_matrix, roc_auc_score
+from scipy.special import softmax
+from sklearn.metrics import confusion_matrix, roc_auc_score, precision_recall_fscore_support
 
 
 from dataloader import train_test_val_split, get_dataset_statistics
 from models import create_model
 from utils.encoding import Rate_Encoder, Current_Encoder
+from utils.masking import center_bounds
+from utils.readout import prepare_loss_inputs, compute_auc, multiclass_auc
 
 from utils.logging import log_model
 import utils.metrics as metrics
@@ -23,7 +26,7 @@ import utils.metrics as metrics
 torch.set_num_threads(1)
 # get 5-fold validation model performance
 
-def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
+def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu', center_frac=1.0):
     y_true = []
     y_pred = []
 
@@ -38,8 +41,11 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
-            output = output.sum(dim=(1,2))
-    
+
+            # must match the readout used in training, see utils.masking
+            start, end = center_bounds(output.shape[1], center_frac)
+            output = output[:, start:end].sum(dim=(1,2))
+
             y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
 
@@ -64,19 +70,104 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu'):
     return auc, accuracy, sensitivity, specificity, ppv, npv, y_true, y_score
 
 
-def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device):
+AAMI_CLASS_NAMES = ['N', 'S', 'V', 'F']
+
+
+def get_multiclass_metrics(model, test_loader, encoder, device='cpu', center_frac=1.0,
+                           class_names=AAMI_CLASS_NAMES):
+    '''
+    multiclass counterpart to get_binary_metrics.
+
+    there is no single operating threshold to tune here -- the prediction is the
+    argmax over classes -- so sensitivity/specificity/ppv/npv are reported
+    per-class (one-vs-rest) rather than as scalars.
+
+    returns overall accuracy, macro/weighted OVR AUC, a per-class dict, and the
+    raw (y_true, y_prob) so callers can aggregate ROC curves across seeds.
+    '''
+
+    y_true = []
+    y_score = []
+
+    model.eval()
+
+    with torch.no_grad():
+        for data, target in test_loader:
+
+            if encoder is not None:
+                data = encoder.encode(data)
+
+            data, target = data.to(device), target.to(device)
+
+            output, _ = model(data)
+
+            # must match the readout used in training, see utils.masking
+            start, end = center_bounds(output.shape[1], center_frac)
+            output = output[:, start:end].sum(dim=1)
+
+            y_true.append(target[:, 0].cpu().numpy())
+            y_score.append(output.cpu().numpy())
+
+    y_true = np.concatenate(y_true, axis=0).astype(int)
+    y_score = np.concatenate(y_score, axis=0)
+
+    n_classes = y_score.shape[1]
+    labels = np.arange(n_classes)
+
+    y_prob = softmax(y_score, axis=1)
+    y_pred = y_prob.argmax(axis=1)
+
+    accuracy = (y_true == y_pred).mean()
+
+    macro_auc = multiclass_auc(y_true, y_score, average='macro')
+    weighted_auc = multiclass_auc(y_true, y_score, average='weighted')
+
+    precision, recall, f1, support = precision_recall_fscore_support(
+        y_true, y_pred, labels=labels, zero_division=0
+    )
+
+    # per-class one-vs-rest specificity, read off the multiclass confusion matrix
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    total = cm.sum()
+    per_class = {}
+
+    for c in labels:
+        name = class_names[c] if c < len(class_names) else str(c)
+
+        tp = cm[c, c]
+        fn = cm[c, :].sum() - tp
+        fp = cm[:, c].sum() - tp
+        tn = total - tp - fn - fp
+
+        per_class[name] = {
+            'precision': precision[c],   # == PPV for this class
+            'recall': recall[c],         # == sensitivity for this class
+            'f1': f1[c],
+            'specificity': tn / (tn + fp + 1e-8),
+            'support': int(support[c]),
+        }
+
+    return accuracy, macro_auc, weighted_auc, per_class, y_true, y_prob
+
+
+def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, center_frac=1.0, binary=True):
 
     model.train()
     epoch_loss = 0
 
-    for batch_idx, (data, target) in enumerate(train_loader): 
+    for batch_idx, (data, target) in enumerate(train_loader):
         optimizer.zero_grad()
-       
+
         data = encoder.encode(data)
         data, target = data.to(device), target.to(device)
 
         output, _ = model(data)
-        output = output.squeeze(-1)
+
+        # supervise only the labeled (center) beat, see utils.masking
+        start, end = center_bounds(output.shape[1], center_frac)
+        output, target = output[:, start:end], target[:, start:end]
+
+        output, target = prepare_loss_inputs(output, target, binary)
 
         loss = loss_fn(output, target)
         loss.backward()
@@ -94,13 +185,13 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device):
     
     return epoch_loss
 
-def evaluate_model(model, test_loader, encoder, loss_fn, device):
+def evaluate_model(model, test_loader, encoder, loss_fn, device, center_frac=1.0, binary=True):
 
     model.eval()
     test_loss = 0
 
     y_true = []
-    y_pred = []
+    y_score = []
 
     with torch.no_grad():
         for data, target in test_loader:
@@ -108,22 +199,26 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device):
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
-            output = output.squeeze(-1)
-            
-            loss = loss_fn(output, target)
 
+            start, end = center_bounds(output.shape[1], center_frac)
+            output, target = output[:, start:end], target[:, start:end]
+
+            # the label is constant across the window, so column 0 is the beat label
             y_true.append(target[:, 0].cpu().numpy())
-            y_pred.append(output.sum(1).cpu().numpy())
+            # sum logits over the supervised timesteps to get one score per sample
+            y_score.append(output.sum(1).cpu().numpy())
+
+            output, target = prepare_loss_inputs(output, target, binary)
+            loss = loss_fn(output, target)
 
             test_loss += loss.item() * data.shape[0]
 
     test_loss /= len(test_loader.dataset)
 
     y_true = np.concatenate(y_true, axis=0)
-    y_pred = np.concatenate(y_pred, axis=0)
+    y_score = np.concatenate(y_score, axis=0)
 
-
-    auc = roc_auc_score(y_true, y_pred)
+    auc = compute_auc(y_true, y_score, binary)
 
     print('\nValidation set: Average loss: {:.4f}, AUC: {:.4f}\n'.format(test_loss, auc))
 
@@ -136,9 +231,11 @@ def train_model(
         encoder, 
         optimizer, 
         loss_fn, 
-        num_epochs, 
-        val_steps=2, 
+        num_epochs,
+        val_steps=2,
         device='cpu',
+        center_frac=1.0,
+        binary=True,
         logging_configs={
             'model_name': None,
             'weight_folder': 'train_weights',
@@ -158,6 +255,10 @@ def train_model(
     num_epochs: number of training epoch
     val_steps: how often to evaluate model on validation set
     device: device to run model on
+    center_frac: fraction of the window, centered on the labeled beat, that is
+        supervised and read out (1.0 = the whole window)
+    binary: whether this is binary (single logit + BCE) or multiclass (class
+        logits + cross entropy)
     logging_configs: information for saving weights and logging model output
 
     '''
@@ -172,14 +273,14 @@ def train_model(
     os.makedirs(log_folder, exist_ok=True)
 
     for epoch in range(num_epochs):
-        train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device)
+        train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, center_frac, binary)
         train_losses.append((epoch, train_loss))
 
         print('Epoch {} Average Loss: {}'.format(epoch, train_loss))
         sys.stdout.flush()
 
         if (epoch + 1) % val_steps == 0:
-            val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device)
+            val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device, center_frac, binary)
             val_losses.append((epoch, val_loss))
             log_model(train_losses, val_losses, log_folder)
 
@@ -231,16 +332,18 @@ if __name__ == '__main__':
             torch.manual_seed(seed)
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-            binary = True
-            out_dims = 1
-
-            num_epochs = 10
 
             model_name = f's_{seed}_{args.model_name}'
             
             with open(f'nested_configs/{args.config_file}', 'r') as file:
                 model_configs = yaml.safe_load(file)
             
+            
+            num_epochs = model_configs['kwargs']['num_epochs']
+            center_frac = model_configs['kwargs'].get('center_frac', 1.0)
+
+            binary = model_configs['kwargs'].get('binary', True)
+
             model = create_model(model_configs, config_key)
             learning_rate = model_configs[config_key]['lr']
 
@@ -300,6 +403,8 @@ if __name__ == '__main__':
                 num_epochs,
                 val_steps,
                 device,
+                center_frac,
+                binary,
                 logging_configs,
             )
 
@@ -307,19 +412,34 @@ if __name__ == '__main__':
             checkpoint = torch.load(model_path)
             model.load_state_dict(checkpoint['model'])
 
-            threshold = None
-            if binary:
-                threshold = metrics.get_threshold(model, val_loader, encoder, device)
-
-            accuracy = metrics.get_accuracy(model, test_loader, encoder, binary, threshold, device)
-            print('\nTest Set Accuracy: {}'.format(accuracy))
+            log_dir = os.path.join(logging_configs['log_folder'], logging_configs['model_name'])
 
             if binary:
-                metrics.get_roc_curve(model, test_loader, encoder, threshold, os.path.join(logging_configs['log_folder'], logging_configs['model_name']), device)
+                threshold = metrics.get_threshold(model, val_loader, encoder, device, center_frac=center_frac)
+
+                accuracy = metrics.get_accuracy(model, test_loader, encoder, binary, threshold, device, center_frac=center_frac)
+                print('\nTest Set Accuracy: {}'.format(accuracy))
+
+                metrics.get_roc_curve(model, test_loader, encoder, threshold, log_dir, device, center_frac=center_frac)
+            else:
+                accuracy, macro_auc, _, per_class, y_true, y_prob = get_multiclass_metrics(
+                    model, test_loader, encoder, device, center_frac=center_frac)
+
+                print('\nTest Set Accuracy: {:.4f}, Macro OVR AUC: {:.4f}'.format(accuracy, macro_auc))
+                print(pd.DataFrame(per_class).T)
+
+                metrics.get_multiclass_roc_curve(y_true, y_prob, log_dir,
+                                                 class_names=AAMI_CLASS_NAMES)
     
 
     # get model performance metrics
     print('Evaluating Models')
+
+    with open(f'nested_configs/{args.config_file}', 'r') as file:
+        model_configs = yaml.safe_load(file)
+
+    center_frac = model_configs['kwargs'].get('center_frac', 1.0)
+    binary = model_configs['kwargs'].get('binary', True)
 
     # --- Create Datasets/DataLoaders --- #
     dataset_configs = {
@@ -328,17 +448,11 @@ if __name__ == '__main__':
         "train_prop": 0.6,
         "val_prop": 0.2,
         "test_prop": 0.2,
-        "binary": True,
+        "binary": binary,
         "random_state": 42,
         "balance": True,
         "fourier": False,
     }
-
-    out_dims = 1
-
-
-    with open(f'nested_configs/{args.config_file}', 'r') as file:
-        model_configs = yaml.safe_load(file)
 
     model_weights = [f's_{seed}_{args.model_name}' for seed in seeds]
     # allow evaluating a separate set of pretrained weights (e.g. remote_weights/model_weights)
@@ -347,12 +461,17 @@ if __name__ == '__main__':
 
     os.makedirs(results_folder, exist_ok=True)
 
-    fix_sensitivity = True
+    # only meaningful for binary: multiclass predicts by argmax, with no threshold to fix
+    fix_sensitivity = binary
 
-    metrics_path = os.path.join(results_folder, 'metrics', args.model_name + '.csv')
+    metrics_name = args.model_name
 
     if fix_sensitivity:
-        metrics_path = os.path.join(results_folder, 'metrics', args.model_name + '_fixed_sensitivity.csv')
+        metrics_name += '_fixed_sensitivity'
+    elif not binary:
+        metrics_name += '_multiclass'
+
+    metrics_path = os.path.join(results_folder, 'metrics', metrics_name + '.csv')
 
     os.makedirs(results_folder, exist_ok=True)
     plots_dir = os.path.join(results_folder, 'plots')
@@ -387,36 +506,60 @@ if __name__ == '__main__':
         checkpoint = torch.load(model_path, weights_only=False)
         model.load_state_dict(checkpoint['model'])            
 
-        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=eval_batch_size)
-        threshold = metrics.get_threshold(model, val_loader, encoder, fix_sensitivity=True)
-
-        # only cache the threshold back into our own weights; leave external/reference weights untouched
-        if args.weight_dir is None:
-            checkpoint['threshold'] = threshold
-            torch.save(checkpoint, model_path)
-
-        auc, accuracy, sensitivity, specificity, ppv, npv, y_true, y_score = get_binary_metrics(model, test_loader, encoder, threshold)
-        roc_data.append((y_true, y_score))
-
-
         folder_name = f'{args.model_name}_seed_{seed}'
-        if fix_sensitivity:
-            folder_name += '_fixed_sensitivity'
 
-        plot_dir = os.path.join(plots_dir, folder_name)
-        os.makedirs(plot_dir, exist_ok=True)
-        metrics.get_roc_curve(model, test_loader, encoder, threshold, plot_dir, 'cpu', model_weight)
+        if binary:
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=eval_batch_size)
+            threshold = metrics.get_threshold(model, val_loader, encoder, fix_sensitivity=True, center_frac=center_frac)
 
-        model_vals.append(
-            {
-                'auc': auc,
+            # only cache the threshold back into our own weights; leave external/reference weights untouched
+            if args.weight_dir is None:
+                checkpoint['threshold'] = threshold
+                torch.save(checkpoint, model_path)
+
+            auc, accuracy, sensitivity, specificity, ppv, npv, y_true, y_score = get_binary_metrics(model, test_loader, encoder, threshold, center_frac=center_frac)
+            roc_data.append((y_true, y_score))
+
+            if fix_sensitivity:
+                folder_name += '_fixed_sensitivity'
+
+            plot_dir = os.path.join(plots_dir, folder_name)
+            os.makedirs(plot_dir, exist_ok=True)
+            metrics.get_roc_curve(model, test_loader, encoder, threshold, plot_dir, 'cpu', center_frac=center_frac)
+
+            model_vals.append(
+                {
+                    'auc': auc,
+                    'accuracy': accuracy,
+                    'sensitivity': sensitivity,
+                    'specificity': specificity,
+                    'ppv': ppv,
+                    'npv': npv
+                }
+            )
+        else:
+            # no threshold to tune: the multiclass prediction is the argmax
+            accuracy, macro_auc, weighted_auc, per_class, y_true, y_prob = get_multiclass_metrics(
+                model, test_loader, encoder, 'cpu', center_frac=center_frac)
+            roc_data.append((y_true, y_prob))
+
+            plot_dir = os.path.join(plots_dir, folder_name)
+            os.makedirs(plot_dir, exist_ok=True)
+            metrics.get_multiclass_roc_curve(y_true, y_prob, plot_dir,
+                                             class_names=AAMI_CLASS_NAMES)
+
+            row = {
                 'accuracy': accuracy,
-                'sensitivity': sensitivity,
-                'specificity': specificity,
-                'ppv': ppv,
-                'npv': npv
+                'macro_auc': macro_auc,
+                'weighted_auc': weighted_auc,
             }
-        )
+
+            # flatten the per-class dict into columns like 'S_recall', 'V_f1', ...
+            for cls_name, cls_metrics in per_class.items():
+                for metric_name, value in cls_metrics.items():
+                    row[f'{cls_name}_{metric_name}'] = value
+
+            model_vals.append(row)
 
     model_df = pd.DataFrame(model_vals)
     mean_vals = model_df.mean()
@@ -430,8 +573,15 @@ if __name__ == '__main__':
 
     # aggregate ROC across seeds: mean curve with a shaded 95% CI band
     mean_roc_name = args.model_name + '_mean_roc'
-    if fix_sensitivity:
-        mean_roc_name += '_fixed_sensitivity'
-    mean_roc_path = os.path.join(plots_dir, mean_roc_name)
-    metrics.plot_mean_roc_curve(roc_data, mean_roc_path,
-                                model_name=args.plot_title or args.model_name)
+
+    if binary:
+        if fix_sensitivity:
+            mean_roc_name += '_fixed_sensitivity'
+        mean_roc_path = os.path.join(plots_dir, mean_roc_name)
+        metrics.plot_mean_roc_curve(roc_data, mean_roc_path,
+                                    model_name=args.plot_title or args.model_name)
+    else:
+        mean_roc_path = os.path.join(plots_dir, mean_roc_name + '_multiclass')
+        metrics.plot_mean_multiclass_roc_curve(roc_data, mean_roc_path,
+                                               class_names=AAMI_CLASS_NAMES,
+                                               model_name=args.plot_title or args.model_name)

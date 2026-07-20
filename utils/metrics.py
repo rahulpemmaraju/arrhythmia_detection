@@ -10,8 +10,10 @@ import torch
 import json
 import os
 
+from .masking import center_bounds
+
 # use validation set to compute the threshold (point closest to 0, 1) on roc curve
-def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=False):
+def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=False, center_frac=1.0):
     y_true = []
     y_pred = []
 
@@ -26,8 +28,11 @@ def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=Fals
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
-            output = output.sum(dim=(1,2))
-    
+
+            # must match the readout used in training, see utils.masking
+            start, end = center_bounds(output.shape[1], center_frac)
+            output = output[:, start:end].sum(dim=(1,2))
+
             y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
 
@@ -49,7 +54,7 @@ def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=Fals
 
     return thresholds[operating_point]
 
-def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, device='cpu'):   
+def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, device='cpu', center_frac=1.0):
     y_true = []
     y_pred = []
 
@@ -64,7 +69,10 @@ def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, devic
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
-            output = output.squeeze(-1).sum(dim=(1))
+            output = output.squeeze(-1)
+
+            start, end = center_bounds(output.shape[1], center_frac)
+            output = output[:, start:end].sum(dim=(1))
 
             if not binary:
                 output = output.argmax(-1)
@@ -83,7 +91,7 @@ def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, devic
     
 
 
-def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu', display=False):
+def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu', display=False, center_frac=1.0):
     y_true = []
     y_pred = []
 
@@ -98,8 +106,11 @@ def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu',
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
-            output = output.squeeze(-1).sum(dim=(1))
-    
+            output = output.squeeze(-1)
+
+            start, end = center_bounds(output.shape[1], center_frac)
+            output = output[:, start:end].sum(dim=(1))
+
             y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
 
@@ -121,6 +132,8 @@ def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu',
 
     if display == True:
         plt.show()
+    else:
+        plt.close()
         
     y_pred = (y_pred > threshold).astype(int)
     cm = confusion_matrix(y_true, y_pred)
@@ -132,6 +145,194 @@ def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu',
 
     if display == True:
         plt.show()
+    else:
+        plt.close()
+
+
+def get_multiclass_roc_curve(y_true, y_prob, log_dir, class_names=None, display=False,
+                             normalize_cm='true'):
+    '''
+    one-vs-rest ROC curves (one per class, plus the macro average) and a
+    multiclass confusion matrix.
+
+    unlike the binary get_roc_curve this takes precomputed scores rather than a
+    model, because the caller already has them from get_multiclass_metrics --
+    no reason to run the (slow) SNN forward pass a second time.
+
+    y_true: (N,) integer class labels
+    y_prob: (N, C) class probabilities
+    normalize_cm: passed to confusion_matrix; 'true' shows per-class recall down
+        the diagonal, which is what you want when the classes are imbalanced
+    '''
+
+    n_classes = y_prob.shape[1]
+
+    if class_names is None:
+        class_names = [str(c) for c in range(n_classes)]
+
+    os.makedirs(log_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(8, 6), dpi=150)
+
+    # interpolate every present class onto a shared grid so they can be averaged
+    mean_fpr = np.linspace(0, 1, 200)
+    interp_tprs = []
+
+    for c in range(n_classes):
+        pos = (y_true == c)
+
+        # a class with no positives (or no negatives) has no defined ROC
+        if not pos.any() or pos.all():
+            print(f'get_multiclass_roc_curve: class {class_names[c]} absent from split, skipped')
+            continue
+
+        fpr, tpr, _ = roc_curve(pos.astype(int), y_prob[:, c])
+        class_auc = auc(fpr, tpr)
+
+        interp_tpr = np.interp(mean_fpr, fpr, tpr)
+        interp_tpr[0] = 0.0
+        interp_tprs.append(interp_tpr)
+
+        ax.plot(fpr, tpr, lw=2, label=f'{class_names[c]} (AUC = {class_auc:.3f})')
+
+    if len(interp_tprs) > 1:
+        mean_tpr = np.stack(interp_tprs, axis=0).mean(axis=0)
+        mean_tpr[-1] = 1.0
+        ax.plot(mean_fpr, mean_tpr, color='black', lw=3, linestyle='-',
+                label=f'Macro avg (AUC = {auc(mean_fpr, mean_tpr):.3f})', zorder=3)
+
+    ax.plot([0, 1], [0, 1], linestyle='--', color='gray', label='Chance')
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title('One-vs-Rest ROC Curves')
+    ax.legend(loc='lower right')
+
+    fig.savefig(os.path.join(log_dir, 'test_roc_multiclass.png'), dpi=300, bbox_inches='tight')
+
+    if display:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    # --- confusion matrix --- #
+    y_pred = y_prob.argmax(axis=1)
+    labels = np.arange(n_classes)
+
+    cm = confusion_matrix(y_true, y_pred, labels=labels, normalize=normalize_cm)
+
+    disp = ConfusionMatrixDisplay(cm, display_labels=class_names)
+    disp.plot(cmap='Blues', values_format='.2f' if normalize_cm else 'd')
+
+    plt.title('Confusion Matrix' + (' (row-normalized)' if normalize_cm == 'true' else ''))
+    plt.savefig(os.path.join(log_dir, 'test_confusion_matrix_multiclass.png'),
+                dpi=300, bbox_inches='tight')
+
+    if display:
+        plt.show()
+    else:
+        plt.close()
+
+
+def plot_mean_multiclass_roc_curve(roc_data, save_path, class_names=None, n_points=200,
+                                   ci=0.95, display=False, model_name=None):
+    '''
+    per-class OVR ROC averaged across seeds/folds, with a shaded CI band.
+
+    roc_data: list of (y_true, y_prob) tuples, one per seed/fold, where y_prob
+              is (N, C)
+    '''
+
+    if len(roc_data) == 0:
+        print('plot_mean_multiclass_roc_curve: no ROC data provided, skipping plot')
+        return
+
+    n_classes = roc_data[0][1].shape[1]
+
+    if class_names is None:
+        class_names = [str(c) for c in range(n_classes)]
+
+    mean_fpr = np.linspace(0, 1, n_points)
+
+    with plt.rc_context({
+        'font.size': 20,
+        'axes.titlesize': 26,
+        'axes.labelsize': 22,
+        'xtick.labelsize': 18,
+        'ytick.labelsize': 18,
+        'legend.fontsize': 16,
+        'axes.linewidth': 2.0,
+    }):
+        fig, ax = plt.subplots(figsize=(9, 9), dpi=600)
+
+        colors = plt.cm.tab10(np.linspace(0, 1, 10))
+
+        for c in range(n_classes):
+            interp_tprs = []
+            aucs = []
+
+            for y_true, y_prob in roc_data:
+                pos = (y_true == c)
+
+                if not pos.any() or pos.all():
+                    continue
+
+                fpr, tpr, _ = roc_curve(pos.astype(int), y_prob[:, c])
+                interp_tpr = np.interp(mean_fpr, fpr, tpr)
+                interp_tpr[0] = 0.0
+                interp_tprs.append(interp_tpr)
+                aucs.append(auc(fpr, tpr))
+
+            if len(interp_tprs) == 0:
+                print(f'plot_mean_multiclass_roc_curve: class {class_names[c]} absent everywhere, skipped')
+                continue
+
+            interp_tprs = np.stack(interp_tprs, axis=0)
+            aucs = np.asarray(aucs)
+            n_folds = interp_tprs.shape[0]
+
+            mean_tpr = interp_tprs.mean(axis=0)
+            mean_tpr[-1] = 1.0
+
+            if n_folds > 1:
+                sem_auc = aucs.std(ddof=1) / np.sqrt(n_folds)
+                auc_ci = stats.t.ppf(0.5 + ci / 2, df=n_folds - 1) * sem_auc
+                label = f'{class_names[c]} (AUC = {aucs.mean():.3f} $\\pm$ {auc_ci:.3f})'
+
+                tpr_sem = interp_tprs.std(axis=0, ddof=1) / np.sqrt(n_folds)
+                tpr_ci = stats.t.ppf(0.5 + ci / 2, df=n_folds - 1) * tpr_sem
+                ax.fill_between(mean_fpr,
+                                np.clip(mean_tpr - tpr_ci, 0, 1),
+                                np.clip(mean_tpr + tpr_ci, 0, 1),
+                                color=colors[c % 10], alpha=0.15, zorder=2)
+            else:
+                label = f'{class_names[c]} (AUC = {aucs.mean():.3f})'
+
+            ax.plot(mean_fpr, mean_tpr, color=colors[c % 10], lw=3, label=label, zorder=3)
+
+        ax.plot([0, 1], [0, 1], linestyle='--', color='gray', lw=2.5, label='Chance', zorder=1)
+
+        ax.set_xlim(-0.01, 1.01)
+        ax.set_ylim(-0.01, 1.01)
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title(model_name if model_name else 'Mean One-vs-Rest ROC', pad=15)
+        ax.set_aspect('equal', adjustable='box')
+        ax.legend(loc='lower right', frameon=False)
+
+        for spine in ('top', 'right'):
+            ax.spines[spine].set_visible(False)
+
+        fig.tight_layout()
+
+        fig.savefig(save_path + '.png', dpi=600, transparent=True, bbox_inches='tight')
+        fig.savefig(save_path + '.pdf', transparent=True, bbox_inches='tight')
+
+        if display:
+            plt.show()
+        else:
+            plt.close()
+
+        plt.close(fig)
 
 
 def plot_mean_roc_curve(roc_data, save_path, n_points=200, ci=0.95, display=False,
@@ -215,7 +416,9 @@ def plot_mean_roc_curve(roc_data, save_path, n_points=200, ci=0.95, display=Fals
         fig.savefig(save_path + '.png', dpi=600, transparent=True, bbox_inches='tight')
         fig.savefig(save_path + '.pdf', transparent=True, bbox_inches='tight')
 
-        if display:
+        if display == True:
             plt.show()
+        else:
+            plt.close()
 
         plt.close(fig)

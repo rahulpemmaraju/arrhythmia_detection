@@ -14,31 +14,34 @@ import scipy.signal as signal
 from config import ARR_DATA_DIR
 
 # USE THE AAMI EC57 STANDARD: https://arxiv.org/html/2503.07276v1
+# IGNORE CLASS Q (PACED BEATS, V FLUTTER)
 BEAT_TO_ENCODING = {
-    '!': 4,
+    '!': -1,
     '"': -1,
     '+': -1,
-    '/': 4,
+    '/': -1,
     'A': 1,
     'E': 2,
     'F': 3,
     'J': 1,
     'L': 0,
     'N': 0,
-    'Q': 4,
+    'Q': -1,
     'R': 0,
     'S': 1,
     'V': 2,
-    '[': 4,
-    ']': 4,
+    '[': -1,
+    ']': -1,
     'a': 1,
     'e': 0,
-    'f': 0,
+    'f': -1,
     'j': 0,
-    'x': 4,
+    'x': -1,
     '|': -1,
     '~': -1,
 }
+
+AAMI_EXCLUDED = {'102', '104', '107', '217'}  # paced records, per AAMI EC57
 
 ARRHYTHMIA_TO_ENCODING = {
     '(AB': 2,
@@ -224,6 +227,7 @@ def main():
     print('--- MIT BIH ARR DATASET --- ')
     with open(os.path.join(args.raw_data_folder, 'RECORDS')) as f:
         arrythmia_samples = [x.strip() for x in f.readlines()]
+    arrythmia_samples = [x for x in arrythmia_samples if x not in AAMI_EXCLUDED] # remove paced samples
 
     arrhythmia_paths = ['{}/{}'.format(args.raw_data_folder, x) for x in arrythmia_samples]
 
