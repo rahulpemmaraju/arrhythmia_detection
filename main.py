@@ -14,10 +14,9 @@ from scipy.special import softmax
 from sklearn.metrics import confusion_matrix, roc_auc_score, precision_recall_fscore_support
 
 
-from dataloader import train_test_val_split, get_dataset_statistics
+from dataloader import train_test_val_split, get_dataset_statistics, get_beat_bounds
 from models import create_model
-from utils.encoding import Rate_Encoder, Current_Encoder
-from utils.masking import center_bounds
+from utils.encoding import Rate_Encoder, Current_Encoder, unpack_batch
 from utils.readout import prepare_loss_inputs, compute_auc, multiclass_auc
 
 from utils.logging import log_model
@@ -26,24 +25,25 @@ import utils.metrics as metrics
 torch.set_num_threads(1)
 # get 5-fold validation model performance
 
-def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu', center_frac=1.0):
+def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu', beat_bounds=None):
     y_true = []
     y_pred = []
 
     model.eval()
 
     with torch.no_grad():
-        for data, target in test_loader:
+        for batch in test_loader:
+            data, target, stats = unpack_batch(batch)
 
             if encoder is not None:
-                data = encoder.encode(data)
+                data = encoder.encode(data, *stats)
 
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
 
-            # must match the readout used in training, see utils.masking
-            start, end = center_bounds(output.shape[1], center_frac)
+            # the labeled beat's own span, from the dataset (see dataloader.get_beat_bounds)
+            start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
             output = output[:, start:end].sum(dim=(1,2))
 
             y_true.append(target[:, 0].numpy())
@@ -73,7 +73,7 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu', cen
 AAMI_CLASS_NAMES = ['N', 'S', 'V', 'F']
 
 
-def get_multiclass_metrics(model, test_loader, encoder, device='cpu', center_frac=1.0,
+def get_multiclass_metrics(model, test_loader, encoder, device='cpu', beat_bounds=None,
                            class_names=AAMI_CLASS_NAMES):
     '''
     multiclass counterpart to get_binary_metrics.
@@ -92,17 +92,18 @@ def get_multiclass_metrics(model, test_loader, encoder, device='cpu', center_fra
     model.eval()
 
     with torch.no_grad():
-        for data, target in test_loader:
+        for batch in test_loader:
+            data, target, stats = unpack_batch(batch)
 
             if encoder is not None:
-                data = encoder.encode(data)
+                data = encoder.encode(data, *stats)
 
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
 
-            # must match the readout used in training, see utils.masking
-            start, end = center_bounds(output.shape[1], center_frac)
+            # the labeled beat's own span, from the dataset (see dataloader.get_beat_bounds)
+            start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
             output = output[:, start:end].sum(dim=1)
 
             y_true.append(target[:, 0].cpu().numpy())
@@ -150,21 +151,23 @@ def get_multiclass_metrics(model, test_loader, encoder, device='cpu', center_fra
     return accuracy, macro_auc, weighted_auc, per_class, y_true, y_prob
 
 
-def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, center_frac=1.0, binary=True):
+def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, beat_bounds=None, binary=True):
 
     model.train()
     epoch_loss = 0
 
-    for batch_idx, (data, target) in enumerate(train_loader):
+    for batch_idx, batch in enumerate(train_loader):
         optimizer.zero_grad()
 
-        data = encoder.encode(data)
+        data, target, stats = unpack_batch(batch)
+
+        data = encoder.encode(data, *stats)
         data, target = data.to(device), target.to(device)
 
         output, _ = model(data)
 
-        # supervise only the labeled (center) beat, see utils.masking
-        start, end = center_bounds(output.shape[1], center_frac)
+        # supervise only the labeled beat span; pre/post context is input only
+        start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
         output, target = output[:, start:end], target[:, start:end]
 
         output, target = prepare_loss_inputs(output, target, binary)
@@ -185,7 +188,7 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, 
     
     return epoch_loss
 
-def evaluate_model(model, test_loader, encoder, loss_fn, device, center_frac=1.0, binary=True,
+def evaluate_model(model, test_loader, encoder, loss_fn, device, beat_bounds=None, binary=True,
                    split_name='Validation'):
 
     model.eval()
@@ -195,13 +198,14 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device, center_frac=1.0
     y_score = []
 
     with torch.no_grad():
-        for data, target in test_loader:
-            data = encoder.encode(data)
+        for batch in test_loader:
+            data, target, stats = unpack_batch(batch)
+            data = encoder.encode(data, *stats)
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
 
-            start, end = center_bounds(output.shape[1], center_frac)
+            start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
             output, target = output[:, start:end], target[:, start:end]
 
             # the label is constant across the window, so column 0 is the beat label
@@ -235,7 +239,7 @@ def train_model(
         num_epochs,
         val_steps=2,
         device='cpu',
-        center_frac=1.0,
+        beat_bounds=None,
         binary=True,
         logging_configs={
             'model_name': None,
@@ -256,8 +260,8 @@ def train_model(
     num_epochs: number of training epoch
     val_steps: how often to evaluate model on validation set
     device: device to run model on
-    center_frac: fraction of the window, centered on the labeled beat, that is
-        supervised and read out (1.0 = the whole window)
+    beat_bounds: (start, end) window-local indices of the labeled beat span,
+        from dataloader.get_beat_bounds. None supervises the whole window.
     binary: whether this is binary (single logit + BCE) or multiclass (class
         logits + cross entropy)
     logging_configs: information for saving weights and logging model output
@@ -280,19 +284,19 @@ def train_model(
     os.makedirs(log_folder, exist_ok=True)
 
     for epoch in range(num_epochs):
-        train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, center_frac, binary)
+        train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, beat_bounds, binary)
         train_losses.append((epoch, train_loss))
 
         print('Epoch {} Average Loss: {}'.format(epoch, train_loss))
         sys.stdout.flush()
 
         if (epoch + 1) % val_steps == 0:
-            val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device, center_frac, binary)
+            val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device, beat_bounds, binary)
             val_losses.append((epoch, val_loss))
             val_aucs.append((epoch, val_auc))
 
             # same forward pass over the training set, in eval mode
-            _, train_auc = evaluate_model(model, train_loader, encoder, loss_fn, device, center_frac, binary,
+            _, train_auc = evaluate_model(model, train_loader, encoder, loss_fn, device, beat_bounds, binary,
                                           split_name='Train')
             train_aucs.append((epoch, train_auc))
 
@@ -358,9 +362,11 @@ if __name__ == '__main__':
             
             
             num_epochs = model_configs['kwargs']['num_epochs']
-            center_frac = model_configs['kwargs'].get('center_frac', 1.0)
-
             binary = model_configs['kwargs'].get('binary', True)
+
+            # patient_norm: z-score each beat by its own record instead of by one
+            # global constant. false reproduces the original behaviour exactly.
+            patient_norm = model_configs['kwargs'].get('patient_norm', False)
 
             model = create_model(model_configs, config_key)
             learning_rate = model_configs[config_key]['lr']
@@ -376,12 +382,16 @@ if __name__ == '__main__':
                 "random_state": seed,
                 "balance": True,
                 "fourier": False,
+                "return_stats": patient_norm,
             }
 
             train_batch_size = 64
             eval_batch_size = 128
 
             train_dataset, val_dataset, test_dataset = train_test_val_split(**dataset_configs)
+
+            # the labeled beat's span within the window, read from the dataset itself
+            beat_bounds = get_beat_bounds(train_dataset)
 
             train_mean, train_std = get_dataset_statistics(train_dataset)
 
@@ -421,7 +431,7 @@ if __name__ == '__main__':
                 num_epochs,
                 val_steps,
                 device,
-                center_frac,
+                beat_bounds,
                 binary,
                 logging_configs,
             )
@@ -433,15 +443,15 @@ if __name__ == '__main__':
             log_dir = os.path.join(logging_configs['log_folder'], logging_configs['model_name'])
 
             if binary:
-                threshold = metrics.get_threshold(model, val_loader, encoder, device, center_frac=center_frac)
+                threshold = metrics.get_threshold(model, val_loader, encoder, device, beat_bounds=beat_bounds)
 
-                accuracy = metrics.get_accuracy(model, test_loader, encoder, binary, threshold, device, center_frac=center_frac)
+                accuracy = metrics.get_accuracy(model, test_loader, encoder, binary, threshold, device, beat_bounds=beat_bounds)
                 print('\nTest Set Accuracy: {}'.format(accuracy))
 
-                metrics.get_roc_curve(model, test_loader, encoder, threshold, log_dir, device, center_frac=center_frac)
+                metrics.get_roc_curve(model, test_loader, encoder, threshold, log_dir, device, beat_bounds=beat_bounds)
             else:
                 accuracy, macro_auc, _, per_class, y_true, y_prob = get_multiclass_metrics(
-                    model, test_loader, encoder, device, center_frac=center_frac)
+                    model, test_loader, encoder, device, beat_bounds=beat_bounds)
 
                 print('\nTest Set Accuracy: {:.4f}, Macro OVR AUC: {:.4f}'.format(accuracy, macro_auc))
                 print(pd.DataFrame(per_class).T)
@@ -456,8 +466,8 @@ if __name__ == '__main__':
     with open(f'nested_configs/{args.config_file}', 'r') as file:
         model_configs = yaml.safe_load(file)
 
-    center_frac = model_configs['kwargs'].get('center_frac', 1.0)
     binary = model_configs['kwargs'].get('binary', True)
+    patient_norm = model_configs['kwargs'].get('patient_norm', False)
 
     # --- Create Datasets/DataLoaders --- #
     dataset_configs = {
@@ -470,6 +480,7 @@ if __name__ == '__main__':
         "random_state": 42,
         "balance": True,
         "fourier": False,
+        "return_stats": patient_norm,
     }
 
     model_weights = [f's_{seed}_{args.model_name}' for seed in seeds]
@@ -511,6 +522,7 @@ if __name__ == '__main__':
         dataset_configs['random_state'] = seed
 
         train_dataset, val_dataset, test_dataset = train_test_val_split(**dataset_configs)
+        beat_bounds = get_beat_bounds(train_dataset)
         train_mean, train_std = get_dataset_statistics(train_dataset)
 
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=eval_batch_size)
@@ -528,14 +540,14 @@ if __name__ == '__main__':
 
         if binary:
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=eval_batch_size)
-            threshold = metrics.get_threshold(model, val_loader, encoder, fix_sensitivity=True, center_frac=center_frac)
+            threshold = metrics.get_threshold(model, val_loader, encoder, fix_sensitivity=True, beat_bounds=beat_bounds)
 
             # only cache the threshold back into our own weights; leave external/reference weights untouched
             if args.weight_dir is None:
                 checkpoint['threshold'] = threshold
                 torch.save(checkpoint, model_path)
 
-            auc, accuracy, sensitivity, specificity, ppv, npv, y_true, y_score = get_binary_metrics(model, test_loader, encoder, threshold, center_frac=center_frac)
+            auc, accuracy, sensitivity, specificity, ppv, npv, y_true, y_score = get_binary_metrics(model, test_loader, encoder, threshold, beat_bounds=beat_bounds)
             roc_data.append((y_true, y_score))
 
             if fix_sensitivity:
@@ -543,7 +555,7 @@ if __name__ == '__main__':
 
             plot_dir = os.path.join(plots_dir, folder_name)
             os.makedirs(plot_dir, exist_ok=True)
-            metrics.get_roc_curve(model, test_loader, encoder, threshold, plot_dir, 'cpu', center_frac=center_frac)
+            metrics.get_roc_curve(model, test_loader, encoder, threshold, plot_dir, 'cpu', beat_bounds=beat_bounds)
 
             model_vals.append(
                 {
@@ -558,7 +570,7 @@ if __name__ == '__main__':
         else:
             # no threshold to tune: the multiclass prediction is the argmax
             accuracy, macro_auc, weighted_auc, per_class, y_true, y_prob = get_multiclass_metrics(
-                model, test_loader, encoder, 'cpu', center_frac=center_frac)
+                model, test_loader, encoder, 'cpu', beat_bounds=beat_bounds)
             roc_data.append((y_true, y_prob))
 
             plot_dir = os.path.join(plots_dir, folder_name)

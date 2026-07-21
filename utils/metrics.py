@@ -10,27 +10,28 @@ import torch
 import json
 import os
 
-from .masking import center_bounds
+from .encoding import unpack_batch
 
 # use validation set to compute the threshold (point closest to 0, 1) on roc curve
-def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=False, center_frac=1.0):
+def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=False, beat_bounds=None):
     y_true = []
     y_pred = []
 
     model.eval()
 
     with torch.no_grad():
-        for data, target in val_loader:
+        for batch in val_loader:
+            data, target, stats = unpack_batch(batch)
 
             if encoder is not None:
-                data = encoder.encode(data)
+                data = encoder.encode(data, *stats)
 
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
 
-            # must match the readout used in training, see utils.masking
-            start, end = center_bounds(output.shape[1], center_frac)
+            # the labeled beat's own span, from the dataset (see dataloader.get_beat_bounds)
+            start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
             output = output[:, start:end].sum(dim=(1,2))
 
             y_true.append(target[:, 0].numpy())
@@ -54,24 +55,25 @@ def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=Fals
 
     return thresholds[operating_point]
 
-def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, device='cpu', center_frac=1.0):
+def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, device='cpu', beat_bounds=None):
     y_true = []
     y_pred = []
 
     model.eval()
 
     with torch.no_grad():
-        for data, target in test_loader:
+        for batch in test_loader:
+            data, target, stats = unpack_batch(batch)
 
             if encoder is not None:
-                data = encoder.encode(data)
+                data = encoder.encode(data, *stats)
 
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
             output = output.squeeze(-1)
 
-            start, end = center_bounds(output.shape[1], center_frac)
+            start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
             output = output[:, start:end].sum(dim=(1))
 
             if not binary:
@@ -91,24 +93,25 @@ def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, devic
     
 
 
-def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu', display=False, center_frac=1.0):
+def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu', display=False, beat_bounds=None):
     y_true = []
     y_pred = []
 
     model.eval()
 
     with torch.no_grad():
-        for data, target in test_loader:
+        for batch in test_loader:
+            data, target, stats = unpack_batch(batch)
 
             if encoder is not None:
-                data = encoder.encode(data)
+                data = encoder.encode(data, *stats)
 
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
             output = output.squeeze(-1)
 
-            start, end = center_bounds(output.shape[1], center_frac)
+            start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
             output = output[:, start:end].sum(dim=(1))
 
             y_true.append(target[:, 0].numpy())

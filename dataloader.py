@@ -10,12 +10,18 @@ from torchvision.io import decode_image
 from torchvision import transforms
 
 class ECGWaveformDataset(Dataset):
-    def __init__(self, data_file, metadata: pd.DataFrame, binary=False, out_size=None, fourier=False):
+    def __init__(self, data_file, metadata: pd.DataFrame, binary=False, out_size=None, fourier=False,
+                 return_stats=False):
         '''
         data_obj: hdf5 file containing the ecg_signals
-        metadata: dataframe containing the metadata for the data 
+        metadata: dataframe containing the metadata for the data
         binary: whether or not the problem is a binary classification problem (normal vs abnormal)
         out_size: if not None, will resize the ecg to a specific length
+        return_stats: also yield this beat's patient_mean/patient_std, so the
+            encoder can z-score each beat by its own record rather than by one
+            global constant. off by default -- turning it on changes __getitem__
+            from a 2-tuple to a 4-tuple, which every existing training loop
+            unpacks as `for data, target in loader`.
         '''
 
         with h5py.File(data_file, 'r') as f:
@@ -25,6 +31,13 @@ class ECGWaveformDataset(Dataset):
         self.out_size = out_size
         self.binary = binary
         self.fourier = fourier
+        self.return_stats = return_stats
+
+        if return_stats and 'patient_mean' not in metadata.columns:
+            raise ValueError(
+                'return_stats=True needs patient_mean/patient_std columns in the '
+                'metadata; regenerate the dataset with create_beat_dataset.py'
+            )
 
     def __len__(self):
         return len(self.metadata)
@@ -33,8 +46,11 @@ class ECGWaveformDataset(Dataset):
         
         sample = self.metadata.iloc[idx]
 
-        waveform = self.data[sample.array_index]
-        label = torch.tensor(sample.label, dtype=torch.long).repeat(waveform.shape)
+        # .iloc on a mixed-dtype frame gives an object/float Series, so once the
+        # metadata carries float columns (patient_mean/patient_std) these come
+        # back as floats and would fail to index the hdf5 dataset
+        waveform = self.data[int(sample.array_index)]
+        label = torch.tensor(int(sample.label), dtype=torch.long).repeat(waveform.shape)
 
         if self.binary:
             label = (label > 0).float()
@@ -48,6 +64,11 @@ class ECGWaveformDataset(Dataset):
 
         if self.fourier:
             waveform = torch.abs(torch.fft.rfft(waveform, dim=-1))
+
+        if self.return_stats:
+            return (waveform, label,
+                    torch.tensor(sample.patient_mean, dtype=torch.float32),
+                    torch.tensor(sample.patient_std, dtype=torch.float32))
 
         return waveform, label
     
@@ -222,6 +243,7 @@ def train_test_val_split(
         ]),
         balance=False,
         split='dechazal',
+        return_stats=False,
         **dataset_kwargs):
     # same arguments as train_test_val_split, but the test set is both
     # patient-disjoint and label-stratified. val_prop is a fraction of the
@@ -261,9 +283,12 @@ def train_test_val_split(
     )
 
     if dataset_type == 'waveform':
-        train_dataset = ECGWaveformDataset(data_file, train_df, binary, out_size, **dataset_kwargs)
-        val_dataset = ECGWaveformDataset(data_file, val_df, binary, out_size, **dataset_kwargs)
-        test_dataset = ECGWaveformDataset(data_file, test_df, binary, out_size, **dataset_kwargs)
+        train_dataset = ECGWaveformDataset(data_file, train_df, binary, out_size,
+                                           return_stats=return_stats, **dataset_kwargs)
+        val_dataset = ECGWaveformDataset(data_file, val_df, binary, out_size,
+                                         return_stats=return_stats, **dataset_kwargs)
+        test_dataset = ECGWaveformDataset(data_file, test_df, binary, out_size,
+                                          return_stats=return_stats, **dataset_kwargs)
 
     elif dataset_type == 'spectrogram':
         train_dataset = ECGSpectrogramDataset(train_df, binary, out_size, train_transforms, **dataset_kwargs)
@@ -271,6 +296,41 @@ def train_test_val_split(
         test_dataset = ECGSpectrogramDataset(test_df, binary, out_size, **dataset_kwargs)
 
     return train_dataset, val_dataset, test_dataset
+
+
+def get_beat_bounds(dataset):
+    '''
+    (start, end) of the labeled beat span inside a window, as window-local indices.
+
+    create_beat_dataset writes these per row: the window is
+    [pre_window | window_length | post_window], and only the middle span belongs
+    to the labeled beat. slicing a model's output with them supervises exactly
+    that beat while the pre/post context stays input-only.
+
+    this replaces the old center_frac heuristic, which assumed the beat sat at
+    the window's midpoint and guessed its extent as a fraction.
+    '''
+
+    metadata = dataset.metadata
+
+    if 'window_start' not in metadata.columns:
+        raise ValueError(
+            'dataset metadata has no window_start/window_end columns; regenerate '
+            'it with create_beat_dataset.py'
+        )
+
+    starts = metadata['window_start'].unique()
+    ends = metadata['window_end'].unique()
+
+    # a single slice is applied to the whole batch, so a dataset mixing
+    # geometries would silently supervise the wrong span for some of its beats
+    if len(starts) != 1 or len(ends) != 1:
+        raise ValueError(
+            f'dataset mixes window geometries (starts={starts}, ends={ends}); '
+            'all beats must share one layout'
+        )
+
+    return int(starts[0]), int(ends[0])
 
 
 def get_dataset_statistics(dataset):

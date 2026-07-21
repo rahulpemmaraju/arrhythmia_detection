@@ -1,19 +1,19 @@
 bounds:
   alpha_0:
-  - 0.9
-  - 0.999
+  - 0.1
+  - 1.0
   threshold_0:
   - 0.1
   - 3.0
   alpha_1:
-  - 0.9
-  - 0.999
+  - 0.1
+  - 1.0
   threshold_1:
   - 0.1
   - 2.0
   alpha_2:
-  - 0.9
-  - 0.999
+  - 0.1
+  - 1.0
   threshold_2:
   - 0.1
   - 3.0
@@ -31,19 +31,19 @@ objective_names:
 - avg_val_loss
 - avg_val_auc
 x0:
-  alpha_0: 0.99
+  alpha_0: 0.9
   threshold_0: 1.0
-  alpha_1: 0.99
+  alpha_1: 0.9
   threshold_1: 1.0
-  alpha_2: 0.99
+  alpha_2: 0.9
   threshold_2: 1.0
   lr: 0.001
 xbest:
-  alpha_0: 0.5
+  alpha_0: 0.9
   threshold_0: 1.0
-  alpha_1: 0.5
+  alpha_1: 0.9
   threshold_1: 1.0
-  alpha_2: 0.5
+  alpha_2: 0.9
   threshold_2: 1.0
   lr: 0.001
 kwargs:
@@ -67,5 +67,8 @@ kwargs:
   train_batch_size: 64
   eval_batch_size: 128
   num_epochs: 20
-  center_frac: 0.5
   optimizer: sgd
+  # z-score each beat by its own record's mean/std instead of by one global
+  # constant over the training set. false is the original behaviour; true needs
+  # a dataset carrying patient_mean/patient_std (see create_beat_dataset.py).
+  patient_norm: false

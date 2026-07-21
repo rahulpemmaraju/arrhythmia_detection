@@ -1,0 +1,48 @@
+# stacked LSTM baseline, binary normal vs abnormal.
+# gated recurrence with a separate cell state -- the most parameters of the three
+# recurrent baselines at the same hidden widths.
+#
+# stripped to compare architectures and nothing else: no dropout, no bias, plain
+# SGD with no momentum or weight decay, and the final epoch's weights are what
+# gets evaluated. all of that matches how main.py trains the SNNs, so a
+# difference in the result is a difference in the architecture rather than in
+# the training recipe.
+model_type: lstm
+
+model_kwargs:
+  # same widths as the four_layer SNN configs' recurrent_dims
+  hidden_dims:
+  - 32
+  - 64
+  - 32
+
+  bidirectional: false   # the SNNs are causal; a bidirectional pass sees the future
+  dropout: 0.0
+  readout: per_timestep
+  bias: false            # the SNN configs all run bias: false
+
+binary: true
+out_dims: 1
+
+num_epochs: 10
+val_steps: 2
+train_batch_size: 64
+eval_batch_size: 128
+
+optimizer: sgd
+lr: 0.01
+momentum: 0.0
+# weight_decay and grad_clip left unset -> 0.0 / off
+
+dataset_configs:
+  train_prop: 0.6
+  val_prop: 0.2
+  test_prop: 0.2
+  balance: true
+  fourier: false
+
+# z-score each beat by its own record's mean/std instead of by one global
+# constant over the training set. false matches the existing SNN pipeline, so
+# results stay comparable; flip to true to test whether patient-specific gain is
+# part of the inter-patient gap. needs a dataset carrying patient_mean/patient_std.
+patient_norm: false

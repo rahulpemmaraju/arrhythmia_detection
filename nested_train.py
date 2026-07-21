@@ -12,11 +12,10 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from dataloader import train_test_val_split, get_dataset_statistics
+from dataloader import train_test_val_split, get_dataset_statistics, get_beat_bounds
 
 from models import create_model as build_model
-from utils.encoding import Current_Encoder
-from utils.masking import center_bounds
+from utils.encoding import Current_Encoder, unpack_batch
 from utils.readout import prepare_loss_inputs, compute_auc
 import utils.metrics as metrics
 
@@ -45,22 +44,24 @@ def create_model(param_vals):
     return build_model(model_configs, 'x0')
 
 
-def train_step(model, train_loader, encoder, optimizer, loss_fn, device, center_frac=1.0, binary=True):
+def train_step(model, train_loader, encoder, optimizer, loss_fn, device, beat_bounds=None, binary=True):
 
     model.train()
     epoch_loss = 0
 
-    for data, target in train_loader:
+    for batch in train_loader:
         optimizer.zero_grad()
 
-        data = encoder.encode(data)
+        data, target, stats = unpack_batch(batch)
+
+        data = encoder.encode(data, *stats)
         data, target = data.to(device), target.to(device)
 
         output, _ = model(data)
 
-        # supervise only the labeled (center) beat -- the flanking context is fed
-        # to the model as input but carries the wrong label, see utils.masking
-        start, end = center_bounds(output.shape[1], center_frac)
+        # supervise only the labeled beat span -- the pre/post context is fed to
+        # the model as input but carries the wrong label
+        start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
         output, target = output[:, start:end], target[:, start:end]
 
         output, target = prepare_loss_inputs(output, target, binary)
@@ -74,7 +75,7 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, device, center_
 
     return epoch_loss
 
-def evaluate_model(model, test_loader, encoder, loss_fn, device, center_frac=1.0, binary=True):
+def evaluate_model(model, test_loader, encoder, loss_fn, device, beat_bounds=None, binary=True):
 
     model.eval()
     test_loss = 0
@@ -83,13 +84,14 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device, center_frac=1.0
     y_score = []
 
     with torch.no_grad():
-        for data, target in test_loader:
-            data = encoder.encode(data)
+        for batch in test_loader:
+            data, target, stats = unpack_batch(batch)
+            data = encoder.encode(data, *stats)
             data, target = data.to(device), target.to(device)
 
             output, _ = model(data)
 
-            start, end = center_bounds(output.shape[1], center_frac)
+            start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
             output, target = output[:, start:end], target[:, start:end]
 
             # the label is constant across the window, so column 0 is the beat label
@@ -144,6 +146,9 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
     dataset_configs = context.dataset_configs
     dataset_configs['binary'] = binary
     dataset_configs['random_state'] = seed
+    # patient_norm: z-score each beat by its own record instead of by one global
+    # constant. false reproduces the original behaviour exactly.
+    dataset_configs['return_stats'] = getattr(context, 'patient_norm', False)
 
     train_dataset, val_dataset, _ = train_test_val_split(**dataset_configs)
     train_mean, train_std = get_dataset_statistics(train_dataset)
@@ -155,9 +160,8 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
     encoder = Current_Encoder(train_mean, train_std)
     loss_fn = nn.BCEWithLogitsLoss() if binary else nn.CrossEntropyLoss()
 
-    # fraction of the window that is supervised/read out, centered on the beat.
-    # absent from a config (e.g. the 1s beat windows) means use the whole window.
-    center_frac = getattr(context, 'center_frac', 1.0)
+    # the labeled beat's span within the window, read from the dataset itself
+    beat_bounds = get_beat_bounds(train_dataset)
 
     if context.optimizer == 'sgd':
         optimizer = optim.SGD(model.parameters(), lr=param_vals['lr'])
@@ -170,9 +174,9 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
         if context.disp:
             print('Training Seed {}, Epoch {}'.format(seed, epoch))
             sys.stdout.flush()
-        train_step(model, train_loader, encoder, optimizer, loss_fn, device, center_frac, binary)
+        train_step(model, train_loader, encoder, optimizer, loss_fn, device, beat_bounds, binary)
 
-    val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device, center_frac, binary)
+    val_loss, val_auc = evaluate_model(model, val_loader, encoder, loss_fn, device, beat_bounds, binary)
 
     end = time.time()
     print('Time Elapsed: {:.2f} minutes'.format((end - start) / 60))
@@ -195,7 +199,7 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
         # multiclass predicts by argmax, so there is no operating threshold to cache
         if binary:
             checkpoint['threshold'] = metrics.get_threshold(
-                model, val_loader, encoder, device, center_frac=center_frac)
+                model, val_loader, encoder, device, beat_bounds=beat_bounds)
 
         torch.save(checkpoint, model_path)
 
