@@ -46,4 +46,4 @@ dataset_configs:
 # constant over the training set. false matches the existing SNN pipeline, so
 # results stay comparable; flip to true to test whether patient-specific gain is
 # part of the inter-patient gap. needs a dataset carrying patient_mean/patient_std.
-patient_norm: false
+patient_norm: true

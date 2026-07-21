@@ -65,4 +65,4 @@ kwargs:
   # z-score each beat by its own record's mean/std instead of by one global
   # constant over the training set. false is the original behaviour; true needs
   # a dataset carrying patient_mean/patient_std (see create_beat_dataset.py).
-  patient_norm: false
+  patient_norm: true
