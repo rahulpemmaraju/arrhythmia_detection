@@ -44,7 +44,7 @@ def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu', bea
 
             # the labeled beat's own span, from the dataset (see dataloader.get_beat_bounds)
             start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
-            output = output[:, start:end].sum(dim=(1,2))
+            output = output[:, start:end].mean(dim=(1,2))
 
             y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
@@ -104,7 +104,7 @@ def get_multiclass_metrics(model, test_loader, encoder, device='cpu', beat_bound
 
             # the labeled beat's own span, from the dataset (see dataloader.get_beat_bounds)
             start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
-            output = output[:, start:end].sum(dim=1)
+            output = output[:, start:end].mean(dim=1)
 
             y_true.append(target[:, 0].cpu().numpy())
             y_score.append(output.cpu().numpy())
@@ -210,8 +210,15 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device, beat_bounds=Non
 
             # the label is constant across the window, so column 0 is the beat label
             y_true.append(target[:, 0].cpu().numpy())
-            # sum logits over the supervised timesteps to get one score per sample
-            y_score.append(output.sum(1).cpu().numpy())
+            # mean, not sum, over the supervised timesteps. the two are monotonically
+            # related so binary AUC is identical, but multiclass_auc softmaxes this
+            # score -- and summing over the ~180-sample span scales logits by ~180,
+            # saturating softmax so ~85% of rows hit probability exactly 1.0. measured
+            # cost on the multiclass convnet: macro AUC 0.824 -> 0.651. the error also
+            # tracks readout magnitude, which the `threshold` search dimension moves by
+            # ~12 orders of magnitude, so summing biases model ranking toward
+            # small-logit configs rather than better ones.
+            y_score.append(output.mean(1).cpu().numpy())
 
             output, target = prepare_loss_inputs(output, target, binary)
             loss = loss_fn(output, target)

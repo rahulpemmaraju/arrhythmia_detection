@@ -344,7 +344,16 @@ class RNN_Baseline(nn.Module):
         bidirectional: off by default -- the SNNs are causal, so a bidirectional
             baseline sees the future and is not a like-for-like comparison.
         bias: defaults off to match the SNN configs, which all run bias: false.
-        readout/beat_bounds: as in Conv1D_Baseline.
+        readout: 'per_timestep' and 'pooled' as in Conv1D_Baseline, plus 'last' --
+            classify from the hidden state at the final timestep of the beat span
+            and broadcast that logit across t. 'last' is the conventional readout
+            for a gated RNN, which carries a dense continuous state that has
+            already integrated the whole sequence; note it is the opposite of
+            'per_timestep' for deployment, since it cannot decide until the span
+            has fully arrived.
+        beat_bounds: as in Conv1D_Baseline. 'pooled' and 'last' both respect it,
+            so with post_window > 0 the readout is taken at the end of the beat
+            rather than the end of the window.
         '''
 
         super(RNN_Baseline, self).__init__()
@@ -352,8 +361,9 @@ class RNN_Baseline(nn.Module):
         if cell_type not in ('rnn', 'gru', 'lstm'):
             raise ValueError(f"cell_type must be 'rnn', 'gru' or 'lstm', got {cell_type!r}")
 
-        if readout not in ('per_timestep', 'pooled'):
-            raise ValueError(f"readout must be 'per_timestep' or 'pooled', got {readout!r}")
+        if readout not in ('per_timestep', 'pooled', 'last'):
+            raise ValueError(
+                f"readout must be 'per_timestep', 'pooled' or 'last', got {readout!r}")
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -390,9 +400,18 @@ class RNN_Baseline(nn.Module):
             if i < len(self.layers) - 1:
                 h = self.dropout(h)
 
-        if self.readout == 'pooled':
+        if self.readout in ('pooled', 'last'):
             start, end = self.beat_bounds if self.beat_bounds is not None else (0, h.shape[1])
-            output = self.fc(h[:, start:end].mean(dim=1))
+
+            if self.readout == 'pooled':
+                summary = h[:, start:end].mean(dim=1)
+            else:
+                # the final state of the beat span. an RNN state is already a
+                # running summary of everything before it, so this is a readout
+                # of the whole span rather than of one instant.
+                summary = h[:, end - 1]
+
+            output = self.fc(summary)
             outputs = output.unsqueeze(1).expand(-1, h.shape[1], -1)
 
             return outputs, output

@@ -136,8 +136,15 @@ def evaluate_model(model, loader, encoder, loss_fn, device, beat_bounds=None, bi
 
             # the label is constant across the window, so column 0 is the beat label
             y_true.append(target[:, 0].cpu().numpy())
-            # sum logits over the supervised timesteps to get one score per sample
-            y_score.append(output.sum(1).cpu().numpy())
+            # mean, not sum, over the supervised timesteps. the two are monotonically
+            # related so binary AUC is identical, but multiclass_auc softmaxes this
+            # score -- and summing over the ~180-sample span scales logits by ~180,
+            # saturating softmax so ~85% of rows hit probability exactly 1.0. measured
+            # cost on the multiclass convnet: macro AUC 0.824 -> 0.651. the error also
+            # tracks readout magnitude, which the `threshold` search dimension moves by
+            # ~12 orders of magnitude, so summing biases model ranking toward
+            # small-logit configs rather than better ones.
+            y_score.append(output.mean(1).cpu().numpy())
 
             output, target = prepare_loss_inputs(output, target, binary)
             test_loss += loss_fn(output, target).item() * data.shape[0]

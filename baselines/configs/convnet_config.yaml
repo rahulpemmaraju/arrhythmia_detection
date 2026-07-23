@@ -31,13 +31,13 @@ model_kwargs:
 binary: true
 out_dims: 1
 
-num_epochs: 5
-val_steps: 2
+num_epochs: 20
+val_steps: 5
 train_batch_size: 64
 eval_batch_size: 128
 
 optimizer: sgd
-lr: 0.1
+lr: 0.01
 momentum: 0.0
 # weight_decay and grad_clip left unset -> 0.0 / off
 

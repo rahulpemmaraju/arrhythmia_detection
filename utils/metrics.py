@@ -32,7 +32,7 @@ def get_threshold(model, val_loader, encoder, device='cpu', fix_sensitivity=Fals
 
             # the labeled beat's own span, from the dataset (see dataloader.get_beat_bounds)
             start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
-            output = output[:, start:end].sum(dim=(1,2))
+            output = output[:, start:end].mean(dim=(1,2))
 
             y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
@@ -74,7 +74,7 @@ def get_accuracy(model, test_loader, encoder, binary=True, threshold=None, devic
             output = output.squeeze(-1)
 
             start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
-            output = output[:, start:end].sum(dim=(1))
+            output = output[:, start:end].mean(dim=(1))
 
             if not binary:
                 output = output.argmax(-1)
@@ -112,7 +112,7 @@ def get_roc_curve(model, test_loader, encoder, threshold, log_dir, device='cpu',
             output = output.squeeze(-1)
 
             start, end = beat_bounds if beat_bounds is not None else (0, output.shape[1])
-            output = output[:, start:end].sum(dim=(1))
+            output = output[:, start:end].mean(dim=(1))
 
             y_true.append(target[:, 0].numpy())
             y_pred.append(output.numpy())
