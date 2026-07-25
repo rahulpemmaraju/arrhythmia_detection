@@ -313,6 +313,34 @@ class ConvNet_Baseline(nn.Module):
         return outputs, output
 
 
+def _build_rnn_stack(cell_type, in_dims, hidden_dims, bidirectional, bias, nonlinearity):
+    '''
+    a stack of single-layer RNN/GRU/LSTM modules, one per entry of hidden_dims.
+
+    nn.GRU and friends only take a single hidden width for a whole num_layers
+    stack, so a tapering stack like [32, 64, 32] has to be built as separate
+    one-layer modules. shared by both recurrent baselines so they differ only in
+    how they read the sequence out, not in what they are.
+    '''
+
+    rnn_cls = {'rnn': nn.RNN, 'gru': nn.GRU, 'lstm': nn.LSTM}[cell_type]
+    directions = 2 if bidirectional else 1
+
+    # nonlinearity is an nn.RNN-only argument; passing it to GRU/LSTM raises
+    cell_kwargs = {'nonlinearity': nonlinearity} if cell_type == 'rnn' else {}
+
+    layers = nn.ModuleList()
+    widths = [in_dims] + [d * directions for d in hidden_dims]
+
+    for c_in, hidden in zip(widths[:-1], hidden_dims):
+        layers.append(rnn_cls(
+            c_in, hidden, num_layers=1, batch_first=True,
+            bidirectional=bidirectional, bias=bias, **cell_kwargs,
+        ))
+
+    return layers, directions
+
+
 class RNN_Baseline(nn.Module):
 
     def __init__(
@@ -371,20 +399,8 @@ class RNN_Baseline(nn.Module):
         self.readout = readout
         self.beat_bounds = beat_bounds
 
-        rnn_cls = {'rnn': nn.RNN, 'gru': nn.GRU, 'lstm': nn.LSTM}[cell_type]
-        directions = 2 if bidirectional else 1
-
-        # nonlinearity is an nn.RNN-only argument; passing it to GRU/LSTM raises
-        cell_kwargs = {'nonlinearity': nonlinearity} if cell_type == 'rnn' else {}
-
-        self.layers = nn.ModuleList()
-        widths = [in_dims] + [d * directions for d in hidden_dims]
-
-        for c_in, hidden in zip(widths[:-1], hidden_dims):
-            self.layers.append(rnn_cls(
-                c_in, hidden, num_layers=1, batch_first=True,
-                bidirectional=bidirectional, bias=bias, **cell_kwargs,
-            ))
+        self.layers, directions = _build_rnn_stack(
+            cell_type, in_dims, hidden_dims, bidirectional, bias, nonlinearity)
 
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc = nn.Linear(hidden_dims[-1] * directions, out_dims)
@@ -421,12 +437,140 @@ class RNN_Baseline(nn.Module):
         return outputs, outputs[:, -1]
 
 
+class RNNEncoder_Baseline(nn.Module):
+
+    def __init__(
+            self,
+            in_dims: int = 1,
+            out_dims: int = 1,
+            hidden_dims: List[int] = [32, 64, 32],
+            cell_type: str = 'lstm',
+            nonlinearity: str = 'tanh',
+            bidirectional: bool = True,
+            global_pool: str = 'avg',
+            dropout: float = 0.0,
+            beat_bounds=None,
+            bias: bool = False,
+        ):
+
+        '''
+        an RNN/GRU/LSTM used as a fixed-length feature extractor: run the stack
+        over the window, collapse the beat span to one vector, and take a single
+        dense readout. one prediction per window.
+
+        this is to RNN_Baseline what ConvNet_Baseline is to Conv1D_Baseline --
+        same encoder family, but the sequence is a means to a window-level
+        embedding rather than a stream of per-timestep decisions. the three
+        differences from RNN_Baseline are the same three that separate the two
+        conv baselines:
+
+        - it is not causal by default. bidirectional=True runs the stack in both
+          directions, so the embedding at every t has seen the whole window. a
+          window classifier already has the beat in hand, so there is no reason
+          to hide the future from it -- but it is then not an online model, and
+          is getting information the SNNs never see.
+        - it collapses time once, at the end, instead of emitting a logit at
+          each step. the recurrent state is doing the same job the conv stack's
+          channels do: producing features that a pool summarizes.
+        - it predicts once per window, which is what the pooling buys.
+
+        note the causal/streaming variants of this idea already exist as
+        RNN_Baseline(readout='pooled') and readout='last' -- this class is for
+        the conventional non-causal encoder-classifier, so bidirectional and the
+        pooling choices are first-class here rather than bolted onto a model
+        whose default is a streaming readout.
+
+        the output is still broadcast to (B, T, out_dims) so the loss, the
+        beat-span masking and the metrics helpers all apply unchanged.
+
+        cell_type: 'rnn', 'gru' or 'lstm', as in RNN_Baseline.
+        nonlinearity: 'tanh' or 'relu', vanilla RNN only.
+        bidirectional: on by default, unlike RNN_Baseline. see above.
+        global_pool: how the beat span collapses to one vector.
+            'avg'  -- mean over the span. every timestep contributes, so a beat
+                      whose abnormality is spread over its shape is represented
+                      as well as one with a single sharp marker.
+            'max'  -- per-feature max, which picks out the strongest evidence
+                      anywhere in the span and ignores where it occurred.
+            'last' -- the recurrent state at the end of the span, the
+                      conventional RNN readout. when bidirectional, this is the
+                      forward state at the end of the span concatenated with the
+                      backward state at its start, so both halves have consumed
+                      the entire span rather than half of it.
+        beat_bounds: (start, end) window-local indices of the labeled beat span,
+            from dataloader.get_beat_bounds. the pool covers only this span,
+            matching what the loss supervises -- pooling the whole window would
+            fold in the pre/post context, which does not belong to the beat.
+        bias: defaults off to match the SNN configs.
+        '''
+
+        super(RNNEncoder_Baseline, self).__init__()
+
+        if cell_type not in ('rnn', 'gru', 'lstm'):
+            raise ValueError(f"cell_type must be 'rnn', 'gru' or 'lstm', got {cell_type!r}")
+
+        if global_pool not in ('avg', 'max', 'last'):
+            raise ValueError(
+                f"global_pool must be 'avg', 'max' or 'last', got {global_pool!r}")
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.hidden_dims = hidden_dims
+        self.global_pool = global_pool
+        self.beat_bounds = beat_bounds
+
+        self.layers, self.directions = _build_rnn_stack(
+            cell_type, in_dims, hidden_dims, bidirectional, bias, nonlinearity)
+
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.fc = nn.Linear(hidden_dims[-1] * self.directions, out_dims)
+
+    def forward(self, x, logging=False):
+        # x shape: B x T x IN_DIMS -- already what batch_first RNNs expect
+        T = x.shape[1]
+        h = x
+
+        for i, layer in enumerate(self.layers):
+            h, _ = layer(h)
+
+            # no dropout on the last layer's output; the readout follows it
+            if i < len(self.layers) - 1:
+                h = self.dropout(h)
+
+        start, end = self.beat_bounds if self.beat_bounds is not None else (0, T)
+        end = max(end, start + 1)
+
+        if self.global_pool == 'avg':
+            summary = h[:, start:end].mean(dim=1)
+
+        elif self.global_pool == 'max':
+            summary = h[:, start:end].max(dim=1).values
+
+        else:
+            # pytorch concatenates the two directions on the feature axis as
+            # [forward, backward], so the forward half's summary of the span sits
+            # at its last timestep and the backward half's sits at its first
+            width = self.hidden_dims[-1]
+            summary = h[:, end - 1, :width]
+
+            if self.directions == 2:
+                summary = torch.cat([summary, h[:, start, width:]], dim=-1)
+
+        output = self.fc(summary)
+        outputs = output.unsqueeze(1).expand(-1, T, -1)
+
+        return outputs, output
+
+
 BASELINE_MODELS = {
     'conv1d': Conv1D_Baseline,
     'convnet': ConvNet_Baseline,
     'rnn': lambda **kw: RNN_Baseline(cell_type='rnn', **kw),
     'gru': lambda **kw: RNN_Baseline(cell_type='gru', **kw),
     'lstm': lambda **kw: RNN_Baseline(cell_type='lstm', **kw),
+    'rnn_encoder': lambda **kw: RNNEncoder_Baseline(cell_type='rnn', **kw),
+    'gru_encoder': lambda **kw: RNNEncoder_Baseline(cell_type='gru', **kw),
+    'lstm_encoder': lambda **kw: RNNEncoder_Baseline(cell_type='lstm', **kw),
 }
 
 

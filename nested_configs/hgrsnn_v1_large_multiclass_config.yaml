@@ -38,6 +38,18 @@ x0:
   alpha_2: 0.9
   threshold_2: 1.0
   lr: 0.001
+xbest:
+  alpha_0: 0.5011619287590786
+  threshold_0: 0.1220381625561909
+  alpha_1: 0.5151470574577421
+  threshold_1: 0.13281077688770326
+  alpha_2: 0.12171747163526622
+  threshold_2: 1.289744482284484
+  lr: 0.07719697825016393
+
+# avg_val_auc: 0.15656699618180578
+# avg_val_loss: 0.8937957070813034
+
 kwargs:
   num_seeds: 5
   model_type: four_layer_hgsnn

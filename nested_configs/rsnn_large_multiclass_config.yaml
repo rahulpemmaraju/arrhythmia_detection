@@ -47,6 +47,8 @@ xbest:
   threshold_2: 0.12497161341262192
   lr: 0.18614455519649634
 
+# avg_val_loss: 0.8826573825604989
+# avg_val_auc: 0.30308186970275525
 
 kwargs:
   num_seeds: 5

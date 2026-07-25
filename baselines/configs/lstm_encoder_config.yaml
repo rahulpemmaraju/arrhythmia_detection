@@ -1,0 +1,70 @@
+# LSTM used as a feature extractor rather than as a streaming classifier: run a
+# bidirectional stack over the window, average-pool the beat span into one
+# vector, and take a single dense prediction. the counterpart to
+# lstm_config.yaml -- same optimizer, same budget, narrower widths to pay for
+# the second direction (see hidden_dims) -- and the recurrent analog of
+# convnet_config.yaml.
+#
+# note this model is NOT causal and NOT online: the bidirectional pass means the
+# embedding at every timestep has already seen the whole window, which is more
+# information than the SNNs ever get. that is the normal way to build this
+# baseline, but it is a difference to state rather than one to gloss over. for
+# the causal version of the same idea, set readout: pooled in lstm_config.yaml,
+# which keeps the single-direction pass and only changes the readout.
+model_type: lstm_encoder
+
+model_kwargs:
+  # the one config in this directory that does NOT use the four_layer SNN's
+  # [32, 64, 32] widths, because bidirectional literally is two models: it
+  # doubles the gates in every layer and doubles the input width of the next
+  # one, so [32, 64, 32] costs 115,009 parameters here against 41,121 for the
+  # single-direction lstm_config.yaml. that is 3x the model, and a win at 3x the
+  # budget says nothing about the readout.
+  #
+  # these widths are chosen so the bidirectional stack costs 40,623 parameters,
+  # within 1% of lstm_config.yaml. the two configs are then the same LSTM at the
+  # same budget differing only in how the sequence is read out, which is the
+  # comparison this model exists for. it also puts the model inside the range
+  # the rest of the directory spans (rnn 10,305 / convnet 20,673 / conv1d 28,929
+  # / gru 30,849 / lstm 41,121) rather than a factor above all of it.
+  #
+  # note this means the widths are NOT comparable to the SNNs' -- against those,
+  # this config matches parameter count instead. if you would rather hold width
+  # fixed and let the parameters land where they may, as every other config
+  # here does, set [32, 64, 32] and say which of the two you matched.
+  hidden_dims:
+  - 19
+  - 38
+  - 19
+
+  bidirectional: true    # see above -- this is the non-causal encoder baseline
+  global_pool: avg       # 'max' takes the strongest evidence in the span instead;
+                         # 'last' takes the end-of-span state, both directions
+  dropout: 0.0
+  bias: false            # the SNN configs all run bias: false
+
+binary: true
+out_dims: 1
+
+num_epochs: 20
+val_steps: 5
+train_batch_size: 64
+eval_batch_size: 128
+
+optimizer: sgd
+lr: 0.01
+momentum: 0.0
+# weight_decay and grad_clip left unset -> 0.0 / off
+
+dataset_configs:
+  train_prop: 0.6
+  val_prop: 0.2
+  test_prop: 0.2
+  balance: true
+  fourier: false
+
+# z-score each beat by its own record's mean/std instead of by one global
+# constant over the training set. false matches the existing SNN pipeline, so
+# results stay comparable; flip to true to test whether patient-specific gain is
+# part of the inter-patient gap. needs a dataset carrying patient_mean/patient_std.
+patient_norm: true
