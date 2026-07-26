@@ -197,8 +197,13 @@ def train_model(parameters, seed, model_id=None, export=False, plot=False):
         val_auc = 0.5
 
     if export == True:
+        # deliberately the LAST epoch, unlike main.py and baselines/train.py which
+        # both checkpoint the best val loss. the optimizer scores a config, not a
+        # checkpoint, so every trial has to be read at the same endpoint -- letting
+        # trials stop at their own best epoch would reward configs that happen to
+        # peak early rather than configs that are actually better.
         model_path = os.path.join(context.output_dir, f's_{seed}_optimized_{context.model_name}.pth')
-        checkpoint = { 
+        checkpoint = {
             'epoch': epoch,
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),

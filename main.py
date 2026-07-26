@@ -174,6 +174,8 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, 
 
         loss = loss_fn(output, target)
         loss.backward()
+
+        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
         if (batch_idx + 1) % 100 == 0:
@@ -290,6 +292,14 @@ def train_model(
     os.makedirs(logging_configs['weight_folder'], exist_ok=True)
     os.makedirs(log_folder, exist_ok=True)
 
+    # checkpoint on best val loss instead of on the last epoch. a run can train
+    # well for most of its budget and then be destroyed by a single exploding
+    # step late on -- s_4_hgrsnn reached val AUC 0.907 at epoch 9 and finished at
+    # 0.500, and it was the 0.500 model that got saved and scored. a NaN val loss
+    # never compares less than the incumbent, so a diverged epoch cannot win.
+    best_val_loss = float('inf')
+    best_epoch = None
+
     for epoch in range(num_epochs):
         train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, beat_bounds, binary)
         train_losses.append((epoch, train_loss))
@@ -313,13 +323,37 @@ def train_model(
 
             log_model(train_losses, val_losses, log_folder, train_aucs, val_aucs)
 
-    checkpoint = { 
-        'epoch': epoch,
-        'model': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-    }
-    
-    torch.save(checkpoint, model_path)
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_epoch = epoch
+
+                torch.save({
+                    'epoch': epoch,
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'val_loss': val_loss,
+                    'val_auc': val_auc,
+                }, model_path)
+
+                print('Epoch {}: new best val loss {:.4f} (AUC {:.4f}), checkpoint saved'.format(
+                    epoch, val_loss, val_auc))
+                sys.stdout.flush()
+
+    # no epoch ever won: either num_epochs < val_steps so validation never ran, or
+    # every val loss was NaN. save the final weights so the caller's torch.load
+    # still finds a file, but say so rather than leaving a silently-last-epoch model.
+    if best_epoch is None:
+        print('warning: no best checkpoint (validation never produced a finite loss); '
+              'saving final epoch {} weights instead'.format(epoch))
+        torch.save({
+            'epoch': epoch,
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }, model_path)
+    else:
+        print('Best model: epoch {}, val loss {:.4f}'.format(best_epoch, best_val_loss))
+
+    sys.stdout.flush()
 
     return train_losses, val_losses
 

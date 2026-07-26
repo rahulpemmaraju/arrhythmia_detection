@@ -166,13 +166,15 @@ def train_model(model, train_loader, val_loader, encoder, optimizer, loss_fn, co
                 device, beat_bounds, model_path, log_folder):
 
     '''
-    train one baseline and save the FINAL epoch's weights to model_path.
+    train one baseline and save the BEST val loss epoch's weights to model_path.
 
-    main.py saves the SNN's last epoch, so this does too. selecting the best
-    epoch by val AUC would hand the baseline an early-stopping advantage the SNN
-    does not get, which is exactly the kind of asymmetry this setup exists to
-    avoid. the per-epoch val AUCs are still logged, so an early-stopped number
-    can be read off the log if it is ever wanted.
+    main.py selects the SNN's best val loss epoch, so this does too -- the two
+    must use the same rule or the comparison is not like-for-like. this file
+    previously saved the final epoch to match main.py's old behaviour; the
+    rationale is unchanged, only the rule it is matching.
+
+    note nested_train.py deliberately keeps the last epoch: the optimizer scores
+    a config, not a checkpoint, and needs a consistent endpoint across trials.
     '''
 
     num_epochs = config['num_epochs']
@@ -181,6 +183,11 @@ def train_model(model, train_loader, val_loader, encoder, optimizer, loss_fn, co
     grad_clip = config.get('grad_clip', None)
 
     train_losses, val_losses, train_aucs, val_aucs = [], [], [], []
+
+    # a NaN val loss never compares less than the incumbent, so a diverged epoch
+    # cannot win the checkpoint
+    best_val_loss = float('inf')
+    best_epoch = None
 
     for epoch in range(num_epochs):
         train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch,
@@ -210,11 +217,37 @@ def train_model(model, train_loader, val_loader, encoder, optimizer, loss_fn, co
 
         log_model(train_losses, val_losses, log_folder, train_aucs, val_aucs)
 
-    torch.save({
-        'epoch': num_epochs - 1,
-        'model': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-    }, model_path)
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_epoch = epoch
+
+            torch.save({
+                'epoch': epoch,
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'val_loss': val_loss,
+                'val_auc': val_auc,
+            }, model_path)
+
+            print('Epoch {}: new best val loss {:.4f} (AUC {:.4f}), checkpoint saved'.format(
+                epoch, val_loss, val_auc))
+            sys.stdout.flush()
+
+    # no epoch ever won -- every val loss was NaN. save the final weights so the
+    # caller's torch.load still finds a file, but say so rather than leaving a
+    # silently-last-epoch model behind.
+    if best_epoch is None:
+        print('warning: no best checkpoint (validation never produced a finite loss); '
+              'saving final epoch {} weights instead'.format(num_epochs - 1))
+        torch.save({
+            'epoch': num_epochs - 1,
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }, model_path)
+    else:
+        print('Best model: epoch {}, val loss {:.4f}'.format(best_epoch, best_val_loss))
+
+    sys.stdout.flush()
 
     return train_losses, val_losses
 
