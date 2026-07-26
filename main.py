@@ -386,7 +386,6 @@ if __name__ == '__main__':
         config_key = 'x0'
 
     seeds = list(range(args.num_seeds))
-    seeds = [5 if x == 4 else x for x in seeds]
 
 
     if args.train:
