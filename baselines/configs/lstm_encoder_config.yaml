@@ -4,13 +4,7 @@
 # lstm_config.yaml -- same optimizer, same budget, narrower widths to pay for
 # the second direction (see hidden_dims) -- and the recurrent analog of
 # convnet_config.yaml.
-#
-# note this model is NOT causal and NOT online: the bidirectional pass means the
-# embedding at every timestep has already seen the whole window, which is more
-# information than the SNNs ever get. that is the normal way to build this
-# baseline, but it is a difference to state rather than one to gloss over. for
-# the causal version of the same idea, set readout: pooled in lstm_config.yaml,
-# which keeps the single-direction pass and only changes the readout.
+
 model_type: lstm_encoder
 
 model_kwargs:
@@ -47,7 +41,7 @@ binary: true
 out_dims: 1
 
 num_epochs: 20
-val_steps: 5
+val_steps: 2
 train_batch_size: 64
 eval_batch_size: 128
 
@@ -63,8 +57,4 @@ dataset_configs:
   balance: true
   fourier: false
 
-# z-score each beat by its own record's mean/std instead of by one global
-# constant over the training set. false matches the existing SNN pipeline, so
-# results stay comparable; flip to true to test whether patient-specific gain is
-# part of the inter-patient gap. needs a dataset carrying patient_mean/patient_std.
 patient_norm: true

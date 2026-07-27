@@ -26,12 +26,12 @@ binary: true
 out_dims: 1
 
 num_epochs: 20
-val_steps: 5
+val_steps: 2
 train_batch_size: 64
 eval_batch_size: 128
 
 optimizer: sgd
-lr: 0.01
+lr: 0.1
 momentum: 0.0
 # weight_decay and grad_clip left unset -> 0.0 / off
 
@@ -42,8 +42,4 @@ dataset_configs:
   balance: true
   fourier: false
 
-# z-score each beat by its own record's mean/std instead of by one global
-# constant over the training set. false matches the existing SNN pipeline, so
-# results stay comparable; flip to true to test whether patient-specific gain is
-# part of the inter-patient gap. needs a dataset carrying patient_mean/patient_std.
 patient_norm: true

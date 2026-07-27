@@ -3,6 +3,8 @@ import torch.nn as nn
 
 from typing import List
 
+from .conv_td import ConvTD
+
 '''
 non-spiking baselines.
 
@@ -313,6 +315,165 @@ class ConvNet_Baseline(nn.Module):
         return outputs, output
 
 
+class ConvTD_Baseline(nn.Module):
+
+    def __init__(
+            self,
+            in_dims: int = 1,
+            out_dims: int = 1,
+            hidden_dims: List[int] = [32, 64, 32],
+            kernel_size: int = 5,
+            pool_size: int = 2,
+            pool_type: str = 'max',
+            global_pool: str = 'avg',
+            dropout: float = 0.0,
+            norm: str = 'none',
+            fixed_R: bool = True,
+            fixed_U: bool = True,
+            fixed_W: bool = True,
+            dynamic_K: bool = False,
+            beat_bounds=None,
+            bias: bool = False,
+        ):
+
+        '''
+        ConvNet_Baseline with every nn.Conv1d replaced by a ConvTD layer, and
+        nothing else changed: same block structure, same pooling, same readout,
+        same output contract.
+
+        the point of the swap is that ConvTD is provably a superset of conv1d --
+        at fixed_R = fixed_U = fixed_W = True, dynamic_K = False it computes
+        exactly what the Conv1d it replaced would (see conv_td.py's __main__).
+        so this model and ConvNet_Baseline are the *same function* in their
+        default configuration, and any difference in results comes from the flags
+        turned on here rather than from an incidental architecture change. that
+        is what makes it a controlled comparison rather than another baseline.
+
+        the arguments shared with ConvNet_Baseline mean exactly what they mean
+        there. the ones that do not:
+
+        fixed_R: freeze the state-to-state recurrence at 0. unfreezing lets each
+            layer carry state across time, which a conv cannot do at all.
+        fixed_U: freeze the top-down projection at I. this is the path that
+            carries layer l+1's readout down to layer l, and holding it at the
+            identity is what makes the stack sum taps the way a conv does.
+        fixed_W: freeze the state-to-readout projection at I.
+        dynamic_K: let the kernel be reweighted per timestep by the layer's own
+            previous state. this is the actual proposal -- the other three flags
+            exist mostly to isolate its contribution.
+
+        bias: accepted only for config compatibility with the conv baselines.
+            ConvTD has no bias term, so bias=True is rejected rather than
+            silently ignored.
+
+        cost: ConvTD runs a python loop over timesteps, so a forward pass is
+            O(T) sequential rather than one batched conv call. with pooling, the
+            loop length is T + T/pool + T/pool^2 + ..., which is where nearly all
+            the runtime goes -- expect this to be substantially slower per epoch
+            than ConvNet_Baseline even where it computes the identical function.
+        '''
+
+        super(ConvTD_Baseline, self).__init__()
+
+        if kernel_size % 2 == 0:
+            raise ValueError(f'kernel_size must be odd for symmetric padding, got {kernel_size}')
+
+        if pool_type not in ('max', 'avg'):
+            raise ValueError(f"pool_type must be 'max' or 'avg', got {pool_type!r}")
+
+        if global_pool not in ('avg', 'max'):
+            raise ValueError(f"global_pool must be 'avg' or 'max', got {global_pool!r}")
+
+        if bias:
+            raise ValueError('ConvTD has no bias term, so bias=True cannot be honoured')
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.hidden_dims = hidden_dims
+        self.kernel_size = kernel_size
+        self.pool_size = pool_size
+        self.global_pool = global_pool
+        self.beat_bounds = beat_bounds
+
+        # the ConvTD layers and the pool/norm/activation that follows each are
+        # kept apart because they want different layouts: ConvTD is (B, T, C) and
+        # everything else here is (B, C, T)
+        tds, posts = [], []
+        widths = [in_dims] + list(hidden_dims)
+
+        for c_in, c_out in zip(widths[:-1], widths[1:]):
+            tds.append(ConvTD(
+                c_in, c_out,
+                kernel_size=kernel_size,
+                padding=(kernel_size - 1) // 2,  # 'same', and <= kernel_size - 1 for odd k
+                fixed_R=fixed_R,
+                fixed_U=fixed_U,
+                fixed_W=fixed_W,
+                dynamic_K=dynamic_K,
+            ))
+
+            layers = []
+
+            if norm == 'batch':
+                layers.append(nn.BatchNorm1d(c_out))
+            elif norm == 'layer':
+                layers.append(nn.GroupNorm(1, c_out))
+            elif norm != 'none':
+                raise ValueError(f"norm must be 'batch', 'layer' or 'none', got {norm!r}")
+
+            layers.append(nn.ReLU())
+
+            if pool_size > 1:
+                layers.append(nn.MaxPool1d(pool_size) if pool_type == 'max'
+                              else nn.AvgPool1d(pool_size))
+
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+
+            posts.append(nn.Sequential(*layers))
+
+        self.tds = nn.ModuleList(tds)
+        self.posts = nn.ModuleList(posts)
+        self.fc = nn.Linear(hidden_dims[-1], out_dims)
+
+    def receptive_field(self):
+        # identical to ConvNet_Baseline's: a ConvTD of depth k spans exactly the
+        # k input samples a width-k conv would, so swapping the layer type does
+        # not change what the stack can see.
+        rf, stride = 1, 1
+
+        for _ in self.hidden_dims:
+            rf += (self.kernel_size - 1) * stride
+            stride *= max(1, self.pool_size)
+
+        return rf
+
+    def forward(self, x, logging=False):
+        # x shape: B x T x IN_DIMS. h is carried as B x C x T to match the pools,
+        # and transposed into ConvTD's B x T x C for each layer
+        T = x.shape[1]
+
+        h = x.transpose(1, 2)
+
+        for td, post in zip(self.tds, self.posts):
+            h = td(h.transpose(1, 2)).transpose(1, 2)
+            h = post(h)
+
+        # the pools have shrunk the time axis, but the beat span is defined on the
+        # input scale, so it is rescaled by the same factor before slicing
+        if self.beat_bounds is not None:
+            scale = h.shape[-1] / T
+            start, end = (int(round(b * scale)) for b in self.beat_bounds)
+            h = h[..., start:max(end, start + 1)]
+
+        pooled = h.mean(dim=-1) if self.global_pool == 'avg' else h.max(dim=-1).values
+
+        output = self.fc(pooled)
+        outputs = output.unsqueeze(1).expand(-1, T, -1)
+
+        return outputs, output
+
+
 def _build_rnn_stack(cell_type, in_dims, hidden_dims, bidirectional, bias, nonlinearity):
     '''
     a stack of single-layer RNN/GRU/LSTM modules, one per entry of hidden_dims.
@@ -565,6 +726,7 @@ class RNNEncoder_Baseline(nn.Module):
 BASELINE_MODELS = {
     'conv1d': Conv1D_Baseline,
     'convnet': ConvNet_Baseline,
+    'convtd': ConvTD_Baseline,
     'rnn': lambda **kw: RNN_Baseline(cell_type='rnn', **kw),
     'gru': lambda **kw: RNN_Baseline(cell_type='gru', **kw),
     'lstm': lambda **kw: RNN_Baseline(cell_type='lstm', **kw),
