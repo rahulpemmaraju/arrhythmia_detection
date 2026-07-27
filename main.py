@@ -175,7 +175,6 @@ def train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, 
         loss = loss_fn(output, target)
         loss.backward()
 
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
         if (batch_idx + 1) % 100 == 0:
@@ -212,14 +211,6 @@ def evaluate_model(model, test_loader, encoder, loss_fn, device, beat_bounds=Non
 
             # the label is constant across the window, so column 0 is the beat label
             y_true.append(target[:, 0].cpu().numpy())
-            # mean, not sum, over the supervised timesteps. the two are monotonically
-            # related so binary AUC is identical, but multiclass_auc softmaxes this
-            # score -- and summing over the ~180-sample span scales logits by ~180,
-            # saturating softmax so ~85% of rows hit probability exactly 1.0. measured
-            # cost on the multiclass convnet: macro AUC 0.824 -> 0.651. the error also
-            # tracks readout magnitude, which the `threshold` search dimension moves by
-            # ~12 orders of magnitude, so summing biases model ranking toward
-            # small-logit configs rather than better ones.
             y_score.append(output.mean(1).cpu().numpy())
 
             output, target = prepare_loss_inputs(output, target, binary)
@@ -280,9 +271,6 @@ def train_model(
     train_losses = []
     val_losses = []
 
-    # train AUC is logged alongside val AUC so the two can be read together:
-    # both low -> underfitting (budget/lr/capacity), train high + val low ->
-    # generalization gap. train loss alone can't tell these apart.
     train_aucs = []
     val_aucs = []
 
@@ -292,11 +280,6 @@ def train_model(
     os.makedirs(logging_configs['weight_folder'], exist_ok=True)
     os.makedirs(log_folder, exist_ok=True)
 
-    # checkpoint on best val loss instead of on the last epoch. a run can train
-    # well for most of its budget and then be destroyed by a single exploding
-    # step late on -- s_4_hgrsnn reached val AUC 0.907 at epoch 9 and finished at
-    # 0.500, and it was the 0.500 model that got saved and scored. a NaN val loss
-    # never compares less than the incumbent, so a diverged epoch cannot win.
     best_val_loss = float('inf')
     best_epoch = None
 
@@ -339,9 +322,6 @@ def train_model(
                     epoch, val_loss, val_auc))
                 sys.stdout.flush()
 
-    # no epoch ever won: either num_epochs < val_steps so validation never ran, or
-    # every val loss was NaN. save the final weights so the caller's torch.load
-    # still finds a file, but say so rather than leaving a silently-last-epoch model.
     if best_epoch is None:
         print('warning: no best checkpoint (validation never produced a finite loss); '
               'saving final epoch {} weights instead'.format(epoch))
