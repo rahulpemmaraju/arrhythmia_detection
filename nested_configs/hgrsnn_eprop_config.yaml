@@ -22,7 +22,7 @@ bounds:
   - 1.0
 
 stages:
-- source: nested_train
+- source: nested_train_eprop
   get_args_static: get_random_seeds
   compute_features: train_model
   filter_features: combine_losses

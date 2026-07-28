@@ -584,6 +584,43 @@ class TwoLayer_EpropHierarchicalSNN(nn.Module):
         return self._forward_lif(x, logging)
 
         
+    def stream_forward(self, x, on_step):
+        # per-timestep counterpart of _forward_lif; see the module docstring and
+        # FourLayer_EpropHierarchicalSNN.stream_forward
+        B, T, _ = x.shape
+
+        self.reset_traces()
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1, requires_grad=True)
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+        b_1 = torch.zeros(B, 1, requires_grad=True)
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            if self.training:
+                b_0.register_hook(compute_dL_dg_dW_grad(self.bottom_cell.gate.projection.weight, z_0))
+                b_1.register_hook(compute_dL_dg_dW_grad(self.top_cell.gate.projection.weight, z_1))
+
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0)
+            v_1, z_1, b_1 = self.top_cell(z_0, b_0, v_1, z_1)
+
+            # this family has no separate readout -- the top cell emits the logits
+            on_step(t, z_1)
+
+            v_0 = v_0.detach()
+            z_0 = z_0.detach()
+            b_0 = b_0.detach().requires_grad_()
+
+            v_1 = v_1.detach()
+            z_1 = z_1.detach()
+            b_1 = b_1.detach().requires_grad_()
+
+
 class ThreeLayer_EpropHierarchicalSNN(nn.Module):
 
     def __init__(
@@ -705,6 +742,53 @@ class ThreeLayer_EpropHierarchicalSNN(nn.Module):
     
     def forward(self, x, logging=False):
         return self._forward_lif(x, logging)
+
+
+    def stream_forward(self, x, on_step):
+        # per-timestep counterpart of _forward_lif; see the module docstring and
+        # FourLayer_EpropHierarchicalSNN.stream_forward
+        B, T, _ = x.shape
+
+        self.reset_traces()
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1, requires_grad=True)
+
+        v_1 = torch.zeros(B, self.recurrent_dims[1])
+        z_1 = torch.zeros(B, self.recurrent_dims[1])
+        b_1 = torch.zeros(B, 1, requires_grad=True)
+
+        v_2 = torch.zeros(B, self.recurrent_dims[2])
+        z_2 = torch.zeros(B, self.recurrent_dims[2])
+        b_2 = torch.zeros(B, 1, requires_grad=True)
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            if self.training:
+                b_0.register_hook(compute_dL_dg_dW_grad(self.bottom_cell.gate.projection.weight, z_0))
+                b_1.register_hook(compute_dL_dg_dW_grad(self.middle_cell.gate.projection.weight, z_1))
+                b_2.register_hook(compute_dL_dg_dW_grad(self.top_cell.gate.projection.weight, z_2))
+
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0)
+            v_1, z_1, b_1 = self.middle_cell(z_0, b_0, z_2, b_2, v_1, z_1, b_1)
+            v_2, z_2, b_2 = self.top_cell(z_1, b_1, v_2, z_2)
+
+            # this family has no separate readout -- the top cell emits the logits
+            on_step(t, z_2)
+
+            v_0 = v_0.detach()
+            z_0 = z_0.detach()
+            b_0 = b_0.detach().requires_grad_()
+
+            v_1 = v_1.detach()
+            z_1 = z_1.detach()
+            b_1 = b_1.detach().requires_grad_()
+
+            v_2 = v_2.detach()
+            z_2 = z_2.detach()
+            b_2 = b_2.detach().requires_grad_()
 
 
 class FourLayer_EpropHierarchicalSNN(nn.Module):
@@ -864,6 +948,79 @@ class FourLayer_EpropHierarchicalSNN(nn.Module):
 
     def forward(self, x, logging=False):
         return self._forward_lif(x, logging)
+
+
+    def stream_forward(self, x, on_step):
+        '''
+        run the e-prop time loop, handing each timestep's logits to on_step.
+
+        x: (B, T, in_dims) encoded input
+        on_step: callable(t, output) where output is (B, out_dims) for timestep
+            t, still attached to timestep t's graph. It is expected to compute
+            that timestep's loss term and call backward on it; the graph is freed
+            as soon as it returns, which is what keeps peak memory O(1) in T.
+
+        returns None -- no logits are retained. Use forward(x) when you want the
+        stacked (B, T, C) output. See the module docstring for why this is
+        gradient-equivalent to forward() plus a single backward.
+        '''
+
+        B, T, _ = x.shape
+
+        self.reset_traces()
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1, requires_grad=True)
+
+        v_1 = torch.zeros(B, self.recurrent_dims[1])
+        z_1 = torch.zeros(B, self.recurrent_dims[1])
+        b_1 = torch.zeros(B, 1, requires_grad=True)
+
+        v_2 = torch.zeros(B, self.recurrent_dims[2])
+        z_2 = torch.zeros(B, self.recurrent_dims[2])
+        b_2 = torch.zeros(B, 1, requires_grad=True)
+
+        v_fc = torch.zeros(B, self.out_dims)
+        z_fc = torch.zeros(B, self.out_dims)
+        a_fc = torch.zeros(B, self.out_dims)
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            if self.training:
+                b_0.register_hook(compute_dL_dg_dW_grad(self.bottom_cell.gate.projection.weight, z_0))
+                b_1.register_hook(compute_dL_dg_dW_grad(self.middle_cell.gate.projection.weight, z_1))
+                b_2.register_hook(compute_dL_dg_dW_grad(self.top_cell.gate.projection.weight, z_2))
+
+            v_0, z_0, b_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, b_0)
+            v_1, z_1, b_1 = self.middle_cell(z_0, b_0, z_2, b_2, v_1, z_1, b_1)
+            v_2, z_2, b_2 = self.top_cell(z_1, b_1, v_2, z_2)
+
+            output, v_fc, z_fc, a_fc = self._readout(z_2, v_fc, z_fc, a_fc)
+
+            # the caller computes this timestep's loss term and backwards it
+            # here. Once it returns, nothing references timestep t's graph, so
+            # its eligibility traces are freed before the next step allocates
+            # its own.
+            on_step(t, output)
+
+            v_0 = v_0.detach()
+            z_0 = z_0.detach()
+            b_0 = b_0.detach().requires_grad_()
+
+            v_1 = v_1.detach()
+            z_1 = z_1.detach()
+            b_1 = b_1.detach().requires_grad_()
+
+            v_2 = v_2.detach()
+            z_2 = z_2.detach()
+            b_2 = b_2.detach().requires_grad_()
+
+            # keep the readout state truncated as well, consistent with the eprop core
+            v_fc = v_fc.detach()
+            z_fc = z_fc.detach()
+            a_fc = a_fc.detach()
 
 
 if __name__ == '__main__':
