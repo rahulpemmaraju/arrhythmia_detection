@@ -333,6 +333,12 @@ def train_model(
     else:
         print('Best model: epoch {}, val loss {:.4f}'.format(best_epoch, best_val_loss))
 
+    torch.save({
+        'epoch': epoch,
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+    }, model_path)
+    
     sys.stdout.flush()
 
     return train_losses, val_losses
