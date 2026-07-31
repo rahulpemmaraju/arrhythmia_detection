@@ -1,21 +1,5 @@
 '''
 nested.optimize source module for the e-prop models, trained per-timestep.
-
-Identical to nested_train.py except that the training step backwards each
-timestep's loss as its logits are produced instead of accumulating the whole
-sequence and backwarding once. That drops peak memory per worker from ~1.15GB to
-a few MB (measured: test_eprop_streaming_equivalence.py) without changing the
-gradient, which is what let the Expanse optimization jobs stop running out of
-memory at ~2GB per worker.
-
-Point a config's `stages.source` at this module instead of nested_train to use
-it; everything else (objectives, filters, kwargs) is unchanged. Only the e-prop
-model types are supported -- stream_forward raises TypeError on anything else,
-since non-eprop models have no per-timestep eligibility traces and gain nothing
-from this.
-
-Thread limiting is done in the environment (jobscripts/optimize_expanse_eprop.sh
-exports OMP_NUM_THREADS=1) rather than here, because torch reads it at import.
 '''
 
 import torch

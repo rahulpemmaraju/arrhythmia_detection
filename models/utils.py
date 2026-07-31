@@ -6,7 +6,10 @@ from .multiscale_snn import TwoLayer_MultiscaleSNN, ThreeLayer_MultiscaleSNN, On
 from .gated_snn import TwoLayer_GatedSNN, ThreeLayer_GatedSNN, OneLayer_GatedSNN, FourLayer_GatedSNN
 from .hg_snn import ThreeLayer_HGSNN, FourLayer_HGSNN
 from .bsnn import TwoLayer_BSNN, ThreeLayer_BSNN, FourLayer_BSNN
+from .bsnn_no_flush import TwoLayer_BSNN_no_Flush, ThreeLayer_BSNN_no_Flush, FourLayer_BSNN_no_Flush
+from .bsnn_no_share import TwoLayer_BSNN_no_Share, ThreeLayer_BSNN_no_Share, FourLayer_BSNN_no_Share
 from .eprop_hsnn import TwoLayer_EpropHierarchicalSNN, ThreeLayer_EpropHierarchicalSNN, FourLayer_EpropHierarchicalSNN
+from .eprop_bsnn import TwoLayer_EpropBSNN, ThreeLayer_EpropBSNN, FourLayer_EpropBSNN
 
 # these architectures have no separate readout layer -- their top cell emits the
 # output directly, so its width IS out_dims and recurrent_dims[-1] must match it.
@@ -16,6 +19,9 @@ TOP_CELL_IS_READOUT = [
     'three_layer_bsnn', 'three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_hgsnn',
     'three_layer_gsnn', 'three_layer_msnn', 'two_layer_bsnn', 'two_layer_ehsnn',
     'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn',
+    'three_layer_bsnn_no_flush', 'two_layer_bsnn_no_flush',
+    'three_layer_bsnn_no_share', 'two_layer_bsnn_no_share',
+    'three_layer_ebsnn', 'two_layer_ebsnn',
 ]
 
 
@@ -32,7 +38,7 @@ def create_model(model_configs, config_key='x0'):
             neuron_options['beta'] = model_configs[config_key]['beta_0']
             neuron_options['rho'] = model_configs[config_key]['rho_0']
     
-    elif model_configs['kwargs']['model_type'] in ['two_layer_bsnn', 'two_layer_ehsnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
+    elif model_configs['kwargs']['model_type'] in ['two_layer_bsnn', 'two_layer_bsnn_no_flush', 'two_layer_bsnn_no_share', 'two_layer_ebsnn', 'two_layer_ehsnn', 'one_layer_hsnn', 'one_layer_gsnn', 'one_layer_msnn', 'two_layer_snn', 'two_layer_hsnn', 'two_layer_msnn', 'two_layer_gsnn']:
         neuron_options = [
             {
                 'alpha': model_configs[config_key]['alpha_0'],
@@ -54,7 +60,7 @@ def create_model(model_configs, config_key='x0'):
             neuron_options[1]['beta'] = model_configs[config_key]['beta_1']
             neuron_options[1]['rho'] = model_configs[config_key]['rho_1']
 
-    elif model_configs['kwargs']['model_type'] in ['three_layer_bsnn', 'three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_hgsnn', 'three_layer_msnn', 'three_layer_gsnn', 'four_layer_hsnn', 'four_layer_hgsnn', 'four_layer_ehsnn', 'four_layer_gsnn', 'four_layer_bsnn', 'four_layer_msnn', 'four_layer_snn']:
+    elif model_configs['kwargs']['model_type'] in ['three_layer_bsnn', 'three_layer_bsnn_no_flush', 'three_layer_bsnn_no_share', 'three_layer_ebsnn', 'three_layer_ehsnn', 'three_layer_hsnn', 'three_layer_hgsnn', 'three_layer_msnn', 'three_layer_gsnn', 'four_layer_hsnn', 'four_layer_hgsnn', 'four_layer_ehsnn', 'four_layer_gsnn', 'four_layer_bsnn', 'four_layer_bsnn_no_flush', 'four_layer_bsnn_no_share', 'four_layer_ebsnn', 'four_layer_msnn', 'four_layer_snn']:
         neuron_options = [
             {
                 'alpha': model_configs[config_key]['alpha_0'],
@@ -187,6 +193,35 @@ def create_model(model_configs, config_key='x0'):
 
     if model_configs['kwargs']['model_type'] == 'four_layer_bsnn':
         return FourLayer_BSNN(**model_params)
+
+    # bsnn ablations: boundaries without state flushing / without interlayer sharing
+    if model_configs['kwargs']['model_type'] == 'two_layer_bsnn_no_flush':
+        return TwoLayer_BSNN_no_Flush(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'three_layer_bsnn_no_flush':
+        return ThreeLayer_BSNN_no_Flush(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_bsnn_no_flush':
+        return FourLayer_BSNN_no_Flush(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'two_layer_bsnn_no_share':
+        return TwoLayer_BSNN_no_Share(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'three_layer_bsnn_no_share':
+        return ThreeLayer_BSNN_no_Share(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_bsnn_no_share':
+        return FourLayer_BSNN_no_Share(**model_params)
+
+    # e-prop trained bsnn
+    if model_configs['kwargs']['model_type'] == 'two_layer_ebsnn':
+        return TwoLayer_EpropBSNN(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'three_layer_ebsnn':
+        return ThreeLayer_EpropBSNN(**model_params)
+
+    if model_configs['kwargs']['model_type'] == 'four_layer_ebsnn':
+        return FourLayer_EpropBSNN(**model_params)
 
     if model_configs['kwargs']['model_type'] == 'four_layer_msnn':
         return FourLayer_MultiscaleSNN(**model_params)

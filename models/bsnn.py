@@ -416,7 +416,7 @@ class TwoLayer_BSNN(nn.Module):
         if neuron_type in ['ALIF', 'alif']:
             self.neuron_type = 'alif'
             self.bottom_cell = ALIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
-            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[1])
+            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[0], self.out_dims, **neuron_options[1])
         else:
             self.neuron_type = 'lif'
             self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
