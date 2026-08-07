@@ -38,16 +38,14 @@ x0:
   alpha_2: 0.9
   threshold_2: 1.0
   lr: 0.001
-# placeholder: this ablation has not been optimized yet, so xbest mirrors x0.
-# overwrite with the nested.optimize result before using --use_best_model.
 xbest:
-  alpha_0: 0.9
-  threshold_0: 1.0
-  alpha_1: 0.9
-  threshold_1: 1.0
-  alpha_2: 0.9
-  threshold_2: 1.0
-  lr: 0.001
+  alpha_0: 0.5623518751858088
+  threshold_0: 0.13909233348941397
+  alpha_1: 0.2722260532900442
+  threshold_1: 0.27130753150431614
+  alpha_2: 0.18079614931729718
+  threshold_2: 0.26673084179861906
+  lr: 0.10472912831348695
 kwargs:
   num_seeds: 5
   model_type: four_layer_bsnn_no_flush
