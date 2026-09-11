@@ -34,4 +34,11 @@ python main_eprop.py \
 --output_dir=$OUTPUT_DIR \
 --num_seeds=5 --use_best_model
 
+python main.py \
+--config_file=$CONFIG_FILE \
+--model_name=$MODEL_NAME \
+--data_dir=$DATA_DIR \
+--output_dir=$OUTPUT_DIR \
+--num_seeds=5 --use_best_model
+
 EOT
