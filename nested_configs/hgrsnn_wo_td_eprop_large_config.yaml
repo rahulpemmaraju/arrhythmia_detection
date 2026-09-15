@@ -38,8 +38,6 @@ x0:
   alpha_2: 0.9
   threshold_2: 1.0
   lr: 0.001
-# placeholder: this model has not been optimized yet, so xbest mirrors x0.
-# overwrite with the nested.optimize result before using --use_best_model.
 xbest:
   alpha_0: 0.11360920571465782
   threshold_0: 0.998272625127205
