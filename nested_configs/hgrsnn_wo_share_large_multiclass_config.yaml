@@ -26,7 +26,7 @@ stages:
   compute_features: train_model
   filter_features: combine_losses
   get_objectives: get_objectives
-optimization_title: four_layer_bsnn_no_flush_lif_multiclass
+optimization_title: four_layer_hgrsnn_no_share_lif_multiclass
 objective_names:
 - avg_val_loss
 - avg_val_auc
@@ -50,7 +50,7 @@ xbest:
   lr: 0.001
 kwargs:
   num_seeds: 5
-  model_type: four_layer_bsnn_no_flush
+  model_type: four_layer_hgrsnn_no_share
   recurrent_dims:
   - 32
   - 64

@@ -10,7 +10,7 @@ bounds:
   - 1.0
   threshold_1:
   - 0.1
-  - 2.0
+  - 3.0
   alpha_2:
   - 0.1
   - 1.0
@@ -26,7 +26,7 @@ stages:
   compute_features: train_model
   filter_features: combine_losses
   get_objectives: get_objectives
-optimization_title: four_layer_gsnn_lif
+optimization_title: four_layer_hgrsnn_no_flush_lif
 objective_names:
 - avg_val_loss
 - avg_val_auc
@@ -39,16 +39,16 @@ x0:
   threshold_2: 1.0
   lr: 0.001
 xbest:
-  alpha_0: 0.7248109185269977
-  threshold_0: 0.12489999732867144
-  alpha_1: 0.14328059607074398
-  threshold_1: 0.35061014953734493
-  alpha_2: 0.22982483101870302
-  threshold_2: 0.26014212858673447
-  lr: 0.15785529105392473
+  alpha_0: 0.5623518751858088
+  threshold_0: 0.13909233348941397
+  alpha_1: 0.2722260532900442
+  threshold_1: 0.27130753150431614
+  alpha_2: 0.18079614931729718
+  threshold_2: 0.26673084179861906
+  lr: 0.10472912831348695
 kwargs:
   num_seeds: 5
-  model_type: four_layer_gsnn
+  model_type: four_layer_hgrsnn_no_flush
   recurrent_dims:
   - 32
   - 64

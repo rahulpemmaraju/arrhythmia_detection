@@ -11,7 +11,7 @@ usage (from the arrhythmia_detection directory):
 
     python -m baselines.train \
         --config_file=conv1d_config.yaml \
-        --model_name=conv1d \
+        --model_name=conv1d_baseline \
         --data_dir=../beats \
         --output_dir=local_results/baselines \
         --num_seeds=5 --train
@@ -168,13 +168,9 @@ def train_model(model, train_loader, val_loader, encoder, optimizer, loss_fn, co
     '''
     train one baseline and save the BEST val loss epoch's weights to model_path.
 
-    main.py selects the SNN's best val loss epoch, so this does too -- the two
-    must use the same rule or the comparison is not like-for-like. this file
-    previously saved the final epoch to match main.py's old behaviour; the
-    rationale is unchanged, only the rule it is matching.
-
-    note nested_train.py deliberately keeps the last epoch: the optimizer scores
-    a config, not a checkpoint, and needs a consistent endpoint across trials.
+    validation runs every val_steps epochs and on the last epoch, and the epoch
+    with the lowest validation loss is kept. this differs from the SNNs, whose
+    final-epoch weights are kept (main.py, main_eprop.py, nested_train.py).
     '''
 
     num_epochs = config['num_epochs']

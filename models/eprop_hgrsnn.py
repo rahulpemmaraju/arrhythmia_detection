@@ -441,7 +441,7 @@ class LIF_Bottom_Cell(nn.Module):
 
         return v_out, z_out, g_out
     
-class TwoLayer_EpropBSNN(nn.Module):
+class TwoLayer_EpropHGRSNN(nn.Module):
 
     def __init__(
             self,
@@ -474,7 +474,7 @@ class TwoLayer_EpropBSNN(nn.Module):
         neuron_options: kwargs to pass to SNN_Cell
         '''
 
-        super(TwoLayer_EpropBSNN, self).__init__()
+        super(TwoLayer_EpropHGRSNN, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -546,8 +546,8 @@ class TwoLayer_EpropBSNN(nn.Module):
 
         
     def stream_forward(self, x, on_step):
-        # per-timestep counterpart of _forward_lif; see the module docstring and
-        # FourLayer_EpropHierarchicalSNN.stream_forward
+        # per-timestep counterpart of _forward_lif; see
+        # FourLayer_EpropHGRSNN.stream_forward
         B, T, _ = x.shape
 
         self.reset_traces()
@@ -579,7 +579,7 @@ class TwoLayer_EpropBSNN(nn.Module):
             z_1 = z_1.detach()
 
 
-class ThreeLayer_EpropBSNN(nn.Module):
+class ThreeLayer_EpropHGRSNN(nn.Module):
 
     def __init__(
             self,
@@ -612,7 +612,7 @@ class ThreeLayer_EpropBSNN(nn.Module):
         neuron_options: kwargs to pass to SNN_Cell
         '''
 
-        super(ThreeLayer_EpropBSNN, self).__init__()
+        super(ThreeLayer_EpropHGRSNN, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -698,8 +698,8 @@ class ThreeLayer_EpropBSNN(nn.Module):
 
 
     def stream_forward(self, x, on_step):
-        # per-timestep counterpart of _forward_lif; see the module docstring and
-        # FourLayer_EpropHierarchicalSNN.stream_forward
+        # per-timestep counterpart of _forward_lif; see
+        # FourLayer_EpropHGRSNN.stream_forward
         B, T, _ = x.shape
 
         self.reset_traces()
@@ -741,7 +741,7 @@ class ThreeLayer_EpropBSNN(nn.Module):
             z_2 = z_2.detach()
 
 
-class FourLayer_EpropBSNN(nn.Module):
+class FourLayer_EpropHGRSNN(nn.Module):
 
     def __init__(
             self,
@@ -776,7 +776,7 @@ class FourLayer_EpropBSNN(nn.Module):
         out_options: kwargs to pass to the readout layer
         '''
 
-        super(FourLayer_EpropBSNN, self).__init__()
+        super(FourLayer_EpropHGRSNN, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -906,7 +906,7 @@ class FourLayer_EpropBSNN(nn.Module):
             as soon as it returns, which is what keeps peak memory O(1) in T.
 
         returns None -- no logits are retained. Use forward(x) when you want the
-        stacked (B, T, C) output. See the module docstring for why this is
+        stacked (B, T, C) output. See eprop_online.py for why this is
         gradient-equivalent to forward() plus a single backward.
         '''
 

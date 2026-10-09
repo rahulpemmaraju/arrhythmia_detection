@@ -26,7 +26,7 @@ stages:
   compute_features: train_model
   filter_features: combine_losses
   get_objectives: get_objectives
-optimization_title: four_layer_hsnn_lif_multiclass
+optimization_title: four_layer_hgrsnn_lif_multiclass
 objective_names:
 - avg_val_loss
 - avg_val_auc
@@ -39,20 +39,16 @@ x0:
   threshold_2: 1.0
   lr: 0.001
 xbest:
-  alpha_0: 0.4951733993471564
-  threshold_0: 0.20290635111263897
-  alpha_1: 0.259487447376406
-  threshold_1: 0.43802500451501825
-  alpha_2: 0.113900682419589
-  threshold_2: 2.6228875081747502
-  lr: 0.46431194050395574
-
-# avg_val_auc: 0.15582618485950286
-# avg_val_loss: 1.0106825410958493
-
+  alpha_0: 0.8878637081862866
+  threshold_0: 1.3719264923041854
+  alpha_1: 0.23724339247770776
+  threshold_1: 0.3213076887345996
+  alpha_2: 0.1594117149212061
+  threshold_2: 0.3363407589802165
+  lr: 0.15783029164342935
 kwargs:
   num_seeds: 5
-  model_type: four_layer_hsnn
+  model_type: four_layer_hgrsnn
   recurrent_dims:
   - 32
   - 64

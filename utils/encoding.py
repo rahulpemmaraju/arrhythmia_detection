@@ -1,4 +1,4 @@
-# Utility functions for converting continuous input into spikes using different strategies
+# Utility functions for feeding the ECG to the models
 import torch
 
 
@@ -13,27 +13,6 @@ def unpack_batch(batch):
 
     return batch[0], batch[1], tuple(batch[2:])
 
-# basic rate encoding
-class Rate_Encoder():
-    def __init__(self, timesteps):
-        self.timesteps = timesteps
-
-    def encode(self, x):
-        x = (x - x.min()) / (x.max() - x.min() + 1e-8) # normalize to 0 -> 1
-        out = torch.stack([torch.greater(x, torch.rand_like(x)) for _ in range(self.timesteps)]).transpose(0, 1).float()
-        return out
-    
-# basic rate encoding plus reshaping
-class Rate_Encoder_CNN():
-    def __init__(self, timesteps):
-        self.timesteps = timesteps
-
-    def encode(self, x):
-        x = (x - x.min()) / (x.max() - x.min() + 1e-8) # normalize to 0 -> 1
-        x = x.unsqueeze(1)
-        out = torch.stack([torch.greater(x, torch.rand_like(x)) for _ in range(self.timesteps)]).transpose(0, 1).float()
-        return out
-    
 # treat the ecg signal as a continuous current -> normalize using z-score
 class Current_Encoder():
     def __init__(self, mean, std):

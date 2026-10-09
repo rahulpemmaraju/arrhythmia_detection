@@ -1,7 +1,7 @@
 '''
 assert that per-timestep e-prop training matches the batched path.
 
-Each network in models/eprop_hsnn.py carries a second copy of its time loop --
+Each network in models/eprop_hgrsnn.py carries a second copy of its time loop --
 stream_forward -- that hands each timestep's logits to a callback so the loss can
 be backwarded immediately, which is what makes peak memory O(1) in T instead of
 O(T). That is only legitimate if the accumulated gradient is the same one the
@@ -14,7 +14,7 @@ batched forward + single backward produces. This checks:
 
 Run from the package root:  python test_eprop_streaming_equivalence.py
 
-The two time loops are separate implementations on purpose -- eprop_hsnn.py stays
+The two time loops are separate implementations on purpose -- forward() stays
 untouched as the reference. This test is what catches them drifting apart.
 '''
 
@@ -205,7 +205,7 @@ def run_memory_check():
     rows = []
 
     for T in (50, 150, 300):
-        model = build('four_layer_ehsnn', [32, 64, 32], 1)
+        model = build('four_layer_hgrsnn_eprop', [32, 64, 32], 1)
         x, target = make_batch(64, T, 1, binary=True)
 
         model.zero_grad(set_to_none=True)
@@ -252,15 +252,15 @@ if __name__ == '__main__':
 
     results = [
         run_case('four_layer binary, full window',
-                 'four_layer_ehsnn', [32, 64, 32], 1, True, T=60, bounds=None),
+                 'four_layer_hgrsnn_eprop', [32, 64, 32], 1, True, T=60, bounds=None),
         run_case('four_layer binary, beat_bounds subset',
-                 'four_layer_ehsnn', [32, 64, 32], 1, True, T=60, bounds=(12, 47)),
+                 'four_layer_hgrsnn_eprop', [32, 64, 32], 1, True, T=60, bounds=(12, 47)),
         run_case('four_layer multiclass, beat_bounds subset',
-                 'four_layer_ehsnn', [32, 64, 32], 4, False, T=60, bounds=(12, 47)),
+                 'four_layer_hgrsnn_eprop', [32, 64, 32], 4, False, T=60, bounds=(12, 47)),
         run_case('three_layer binary, beat_bounds subset',
-                 'three_layer_ehsnn', [16, 24, 1], 1, True, T=60, bounds=(12, 47)),
+                 'three_layer_hgrsnn_eprop', [16, 24, 1], 1, True, T=60, bounds=(12, 47)),
         run_case('two_layer binary, full window',
-                 'two_layer_ehsnn', [16, 1], 1, True, T=60, bounds=None),
+                 'two_layer_hgrsnn_eprop', [16, 1], 1, True, T=60, bounds=None),
     ]
 
     results.append(run_memory_check())

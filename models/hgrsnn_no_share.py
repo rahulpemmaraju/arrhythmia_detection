@@ -21,33 +21,27 @@ def get_activation_fn(act_name, act_kwargs):
         return nn.Sigmoid()
     
 '''
-Hierarchical LIF Layer: see https://arxiv.org/pdf/1609.01704 for inspiration
-The idea: neurons might only share different time-scale information sparsely as needed
-Top layers can cause lower layers to flush their internal state to ensure hierarchical processing
-high-level neurons always accumulate their internal state; they can be given a bottom-up signal to integrate useful low-level abstractions
-low-level neurons always integrate raw stimulus; they can be given a top-down signal to "reset" their internal state to only capture fine-grained features
-middle-level neurons receive top-down and bottom-up signals to integrate both top-down and bottom-up signals
+Hierarchically gated recurrent SNN (HG-RSNN), inspired by hierarchical multiscale RNNs
+(https://arxiv.org/abs/1609.01704). The bottom and middle cells each emit a binary gate
+b_l[t] (g_l in the paper) from their spikes. When it is on, the layer above reads this
+layer's spikes (sharing), and on the next step this layer's state is reset (flushing).
+The bottom cell always receives the ECG; the top cell is never flushed.
 
-Unlike Hierarchical SNN, the flush is driven purely top-down: bottom-up projections are
-never gated, so layer l+1 always integrates what layer l emits. The only thing a boundary
-does is tell the layer *below* that its segment has ended. Because the flush is a
-context-conditioned re-initialization (T * z_{l+1}) rather than a reset to zero, opening
-the gate is informative rather than purely destructive.
+The bottom and middle cells also build a top-down projection (t_v) that is never used.
+It is kept so the published checkpoints load unchanged; it does not affect the output
+and is excluded from the parameter counts in the paper.
 
-Consequently a layer emits a boundary only if some layer sits below it: the bottom cell
-has no b, and the top cell's b flushes the layer beneath it.
+ABLATION of hgrsnn.py: no interlayer sharing. Boundaries are still emitted and
+still flush the emitting cell's own state, but they no longer gate the bottom-up
+projection -- the layer above reads z_{l-1}[t] at every timestep instead of only
+when the layer below signals a boundary.
 
-"Top Cell":    v[t] = alpha * v[t-1] + W_recurrent * z[t-1] + B * z_{l-1}[t] - z[t-1] * v_thresh
-"Middle Cell": v[t] = (1 - b_{l+1}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * z_{l-1}[t] + T * b_{l+1}[t-1] * z_{l+1}[t-1] - z[t-1] * v_thresh
-"Bottom Cell": v[t] = (1 - b_{l+1}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * x[t]        + T * b_{l+1}[t-1] * z_{l+1}[t-1] - z[t-1] * v_thresh
+"Top Cell": v[t] = alpha * v[t-1] + W_recurrent * z[t-1] + B * z_{l-1}[t] - z[t-1] * v_thresh
+"Bottom Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * x[t] - z[t-1] * v_thresh
+"Middle Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * z_{l-1}[t] - z[t-1] * v_thresh
 
-z[t] = (v[t] - v_thresh) > 0
-b[t] = (Sigmoid(U * z[t]) - 0.5) > 0
-
-Both z and b are hard binary in the forward pass; the atan surrogate supplies the
-gradient. b is a single scalar per sample (out_dims -> 1), broadcast over the layer below.
-Note the top-down terms use b_{l+1}[t-1] and z_{l+1}[t-1] from the previous timestep,
-since layer l+1 has not yet been evaluated at t, while bottom-up terms use z_{l-1}[t].
+z[t] = H(v[t] - v_thresh)
+b[t] = H(Sigmoid(U * z[t]) - 0.5)       (H: Heaviside step, arctan surrogate gradient)
 '''
 class LIF_Top_Cell(nn.Module):
 
@@ -84,14 +78,6 @@ class LIF_Top_Cell(nn.Module):
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
-        # spike to boundary
-        self.z_b = nn.Sequential(
-            HebbianLinearLayer(out_dims, 1, **linear_options),
-            nn.Sigmoid()
-        )
-
-        self.b_grad = surrogate.atan(alpha=2)
-
     def forward(self, b_in, v_previous, z_previous):
 
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
@@ -100,10 +86,7 @@ class LIF_Top_Cell(nn.Module):
 
         z_out = self.spike_grad(v_out - self.threshold)
 
-        b_out = self.z_b(z_out)
-        b_out = self.b_grad(b_out - 0.5)
-
-        return v_out, z_out, b_out
+        return v_out, z_out
     
 class LIF_Middle_Cell(nn.Module):
 
@@ -150,11 +133,10 @@ class LIF_Middle_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, t_in, t_b, v_previous, z_previous):
+    def forward(self, b_in, v_previous, z_previous, b_previous):
 
-        v_out = (1 - t_b) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
+        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
-        v_out += t_b * self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         z_out = self.spike_grad(v_out - self.threshold)
@@ -202,16 +184,24 @@ class LIF_Bottom_Cell(nn.Module):
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
+        # spike to boundary
+        self.z_b = nn.Sequential(
+            HebbianLinearLayer(out_dims, 1, **linear_options),
+            nn.Sigmoid()
+        )
+        self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, t_in, t_b, v_previous, z_previous):
-        v_out = (1 - t_b) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
+    def forward(self, b_in, v_previous, z_previous, b_previous):
+        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
-        v_out += t_b * self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         z_out = self.spike_grad(v_out - self.threshold)
 
-        return v_out, z_out
+        b_out = self.z_b(z_out)
+        b_out = self.b_grad(b_out - 0.5)
+
+        return v_out, z_out, b_out
     
 class ALIF_Top_Cell(nn.Module):
 
@@ -252,14 +242,6 @@ class ALIF_Top_Cell(nn.Module):
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
-        # spike to boundary
-        self.z_b = nn.Sequential(
-            HebbianLinearLayer(out_dims, 1, **linear_options),
-            nn.Sigmoid()
-        )
-
-        self.b_grad = surrogate.atan(alpha=2)
-
     def forward(self, b_in, v_previous, z_previous, a_previous):
 
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
@@ -269,10 +251,7 @@ class ALIF_Top_Cell(nn.Module):
         a_out = self.rho * a_previous + z_previous
         z_out = self.spike_grad(v_out - (self.threshold + self.beta * a_out))
 
-        b_out = self.z_b(z_out)
-        b_out = self.b_grad(b_out - 0.5)
-
-        return v_out, z_out, b_out, a_out
+        return v_out, z_out, a_out
     
 class ALIF_Middle_Cell(nn.Module):
 
@@ -323,11 +302,10 @@ class ALIF_Middle_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, t_in, t_b, v_previous, z_previous, a_previous):
+    def forward(self, b_in, v_previous, z_previous, b_previous, a_previous):
 
-        v_out = (1 - t_b) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
+        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
-        v_out += t_b * self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         a_out = self.rho * a_previous + z_previous
@@ -380,19 +358,27 @@ class ALIF_Bottom_Cell(nn.Module):
         self.t_v = HebbianLinearLayer(next_dims, out_dims, **linear_options) # top to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
+        # spike to boundary
+        self.z_b = nn.Sequential(
+            HebbianLinearLayer(out_dims, 1, **linear_options),
+            nn.Sigmoid()
+        )
+        self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, t_in, t_b, v_previous, z_previous, a_previous):
-        v_out = (1 - t_b) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
+    def forward(self, b_in, v_previous, z_previous, b_previous, a_previous):
+        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
-        v_out += t_b * self.t_v(t_in) # top_down signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         a_out = self.rho * a_previous + z_previous
         z_out = self.spike_grad(v_out - (self.threshold + self.beta * a_out))
 
-        return v_out, z_out, a_out
+        b_out = self.z_b(z_out)
+        b_out = self.b_grad(b_out - 0.5)
 
-class ThreeLayer_HGSNN(nn.Module):
+        return v_out, z_out, b_out, a_out
+
+class TwoLayer_HGRSNN_no_Share(nn.Module):
 
     def __init__(
             self,
@@ -425,7 +411,140 @@ class ThreeLayer_HGSNN(nn.Module):
         neuron_options: kwargs to pass to SNN_Cell
         '''
 
-        super(ThreeLayer_HGSNN, self).__init__()
+        super(TwoLayer_HGRSNN_no_Share, self).__init__()
+
+        self.in_dims = in_dims
+        self.out_dims = out_dims
+        self.recurrent_dims = recurrent_dims
+        self.out_type = out_type
+
+        if isinstance(neuron_options, dict):
+            neuron_options = [neuron_options, neuron_options]
+
+        if neuron_type in ['ALIF', 'alif']:
+            self.neuron_type = 'alif'
+            self.bottom_cell = ALIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
+            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[0], self.out_dims, **neuron_options[1])
+        else:
+            self.neuron_type = 'lif'
+            self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.out_dims, **neuron_options[0])
+            self.top_cell = LIF_Top_Cell(self.recurrent_dims[0], self.out_dims, **neuron_options[1])
+
+    def _forward_lif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1 = self.top_cell(z_0, v_1, z_1)
+
+            outputs.append(z_1.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_1, [torch.stack(b_0s, 1)]
+
+        return outputs, z_1
+    
+    def _forward_alif(self, x, logging):
+        # x shape: B x T x IN_DIMS
+
+        B, T, _ = x.shape
+
+        if logging:
+            b_0s = []
+
+        v_0 = torch.zeros(B, self.recurrent_dims[0])
+        z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
+        a_0 = torch.zeros(B, self.recurrent_dims[0])
+
+        v_1 = torch.zeros(B, self.out_dims)
+        z_1 = torch.zeros(B, self.out_dims)
+        a_1 = torch.zeros(B, self.out_dims)
+
+        outputs = []
+
+        for t in range(T):
+            x_t = x[:, t, :]
+
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, a_1 = self.top_cell(z_0, v_1, z_1, a_1)
+
+            outputs.append(z_1.clone())
+
+            if logging:
+                b_0s.append(b_0.detach().clone())
+
+
+        outputs = torch.stack(outputs, 1)
+
+        if logging:
+            return outputs, z_1, [torch.stack(b_0s, 1)]
+
+        return outputs, z_1
+
+    
+    def forward(self, x, logging=False):
+        if self.neuron_type == 'lif':
+            return self._forward_lif(x, logging)
+        else:
+            return self._forward_alif(x, logging)
+        
+class ThreeLayer_HGRSNN_no_Share(nn.Module):
+
+    def __init__(
+            self,
+            in_dims: int,
+            out_dims: int,
+            recurrent_dims: List[int],
+            out_act: str = 'none', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_act_kwargs: dict = {}, # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            neuron_options: Union[dict, List[dict]] = {
+                'alpha': 0.9,
+                'threshold': 1.0,
+                'spike_grad': surrogate.atan(alpha=2), 
+                'linear_options':{
+                    'learning_rule': 'oja',
+                    'learning_rate': 1e-4,
+                    'bias': True
+                }
+            },
+            neuron_type: str = 'LIF',
+            out_type: str = 'linear', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_options: dict = { # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+                'bias': True,
+            }
+        ):
+
+        '''
+        in_dims: input dimensions
+        out_dims: output dimensions
+        recurrent_dimensions: list of length two with output dimensions of recurrent layers
+        neuron_options: kwargs to pass to SNN_Cell
+        '''
+
+        super(ThreeLayer_HGRSNN_no_Share, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -435,25 +554,16 @@ class ThreeLayer_HGSNN(nn.Module):
         if isinstance(neuron_options, dict):
             neuron_options = [neuron_options, neuron_options, neuron_options]
 
-        # the top cell *is* the readout here, and the middle cell's top-down projection is
-        # built to accept recurrent_dims[2] inputs, so the two have to agree
-        if self.recurrent_dims[2] != self.out_dims:
-            raise ValueError(
-                f'ThreeLayer_HGSNN has no separate readout, so recurrent_dims[-1] must equal '
-                f'out_dims (got {self.recurrent_dims[2]} and {self.out_dims}). '
-                f'Use FourLayer_HGSNN for a wider top layer with a readout.'
-            )
-
         if neuron_type in ['ALIF', 'alif']:
             self.neuron_type = 'alif'
             self.bottom_cell = ALIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[0])
             self.middle_cell = ALIF_Middle_Cell(self.recurrent_dims[0], self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[1])
-            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[2])
+            self.top_cell = ALIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[2])
         else:
             self.neuron_type = 'lif'
             self.bottom_cell = LIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[0])
             self.middle_cell = LIF_Middle_Cell(self.recurrent_dims[0], self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[1])
-            self.top_cell = LIF_Top_Cell(self.recurrent_dims[1], self.recurrent_dims[2], **neuron_options[2])
+            self.top_cell = LIF_Top_Cell(self.recurrent_dims[1], self.out_dims, **neuron_options[2])
 
     def _forward_lif(self, x, logging):
         # x shape: B x T x IN_DIMS
@@ -461,11 +571,12 @@ class ThreeLayer_HGSNN(nn.Module):
         B, T, _ = x.shape
 
         if logging:
+            b_0s = []
             b_1s = []
-            b_2s = []
 
         v_0 = torch.zeros(B, self.recurrent_dims[0])
         z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
 
         v_1 = torch.zeros(B, self.recurrent_dims[1])
         z_1 = torch.zeros(B, self.recurrent_dims[1])
@@ -473,28 +584,27 @@ class ThreeLayer_HGSNN(nn.Module):
 
         v_2 = torch.zeros(B, self.recurrent_dims[2])
         z_2 = torch.zeros(B, self.recurrent_dims[2])
-        b_2 = torch.zeros(B, 1)
 
         outputs = []
 
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1 = self.middle_cell(z_0, z_2, b_2, v_1, z_1)
-            v_2, z_2, b_2 = self.top_cell(z_1, v_2, z_2)
+            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.middle_cell(z_0, v_1, z_1, b_1)
+            v_2, z_2 = self.top_cell(z_1, v_2, z_2)
 
             outputs.append(z_2.clone())
 
             if logging:
+                b_0s.append(b_0.detach().clone())
                 b_1s.append(b_1.detach().clone())
-                b_2s.append(b_2.detach().clone())
 
 
         outputs = torch.stack(outputs, 1)
 
         if logging:
-            return outputs, z_2, [torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
+            return outputs, z_2, [torch.stack(b_0s, 1), torch.stack(b_1s, 1)]
 
         return outputs, z_2
     
@@ -504,11 +614,12 @@ class ThreeLayer_HGSNN(nn.Module):
         B, T, _ = x.shape
 
         if logging:
+            b_0s = []
             b_1s = []
-            b_2s = []
 
         v_0 = torch.zeros(B, self.recurrent_dims[0])
         z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
         a_0 = torch.zeros(B, self.recurrent_dims[0])
 
         v_1 = torch.zeros(B, self.recurrent_dims[1])
@@ -518,7 +629,6 @@ class ThreeLayer_HGSNN(nn.Module):
 
         v_2 = torch.zeros(B, self.recurrent_dims[2])
         z_2 = torch.zeros(B, self.recurrent_dims[2])
-        b_2 = torch.zeros(B, 1)
         a_2 = torch.zeros(B, self.recurrent_dims[2])
 
         outputs = []
@@ -526,43 +636,44 @@ class ThreeLayer_HGSNN(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, a_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, a_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, z_2, b_2, v_1, z_1, a_1)
-            v_2, z_2, b_2, a_2 = self.top_cell(z_1, v_2, z_2, a_2)
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, v_1, z_1, b_1, a_1)
+            v_2, z_2, a_2 = self.top_cell(z_1, v_2, z_2, a_2)
 
             outputs.append(z_2.clone())
 
             if logging:
+                b_0s.append(b_0.detach().clone())
                 b_1s.append(b_1.detach().clone())
-                b_2s.append(b_2.detach().clone())
 
 
         outputs = torch.stack(outputs, 1)
 
         if logging:
-            return outputs, z_2, [ torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
+            return outputs, z_2, [torch.stack(b_0s, 1), torch.stack(b_1s, 1)]
 
         return outputs, z_2
 
+    
     def forward(self, x, logging=False):
         if self.neuron_type == 'lif':
             return self._forward_lif(x, logging)
         else:
             return self._forward_alif(x, logging)
         
-class FourLayer_HGSNN(nn.Module):
+class FourLayer_HGRSNN_no_Share(nn.Module):
 
     def __init__(
             self,
             in_dims: int,
             out_dims: int,
             recurrent_dims: List[int],
-            out_act: str = 'none', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
-            out_act_kwargs: dict = {}, # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_act: str = 'none',
+            out_act_kwargs: dict = {},
             neuron_options: Union[dict, List[dict]] = {
                 'alpha': 0.9,
                 'threshold': 1.0,
-                'spike_grad': surrogate.atan(alpha=2), 
+                'spike_grad': surrogate.atan(alpha=2),
                 'linear_options':{
                     'learning_rule': 'oja',
                     'learning_rate': 1e-4,
@@ -570,8 +681,8 @@ class FourLayer_HGSNN(nn.Module):
                 }
             },
             neuron_type: str = 'LIF',
-            out_type: str = 'linear', # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
-            out_options: dict = { # JUST HERE TO KEEP THINGS CONSISTENT (NOT USED)
+            out_type: str = 'linear',
+            out_options: dict = {
                 'bias': True,
             }
         ):
@@ -579,11 +690,13 @@ class FourLayer_HGSNN(nn.Module):
         '''
         in_dims: input dimensions
         out_dims: output dimensions
-        recurrent_dimensions: list of length two with output dimensions of recurrent layers
+        recurrent_dimensions: list of length three with output dimensions of recurrent layers
         neuron_options: kwargs to pass to SNN_Cell
+        out_type: readout layer type ('linear', 'lif' or 'alif')
+        out_options: kwargs to pass to the readout layer
         '''
 
-        super(FourLayer_HGSNN, self).__init__()
+        super(FourLayer_HGRSNN_no_Share, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -593,8 +706,7 @@ class FourLayer_HGSNN(nn.Module):
         if isinstance(neuron_options, dict):
             neuron_options = [neuron_options, neuron_options, neuron_options]
 
-        # the top cell now emits recurrent_dims[2] features instead of out_dims, so the
-        # readout below is what performs the classification
+        # the top cell emits recurrent_dims[2] features; the readout does the classification
         if neuron_type in ['ALIF', 'alif']:
             self.neuron_type = 'alif'
             self.bottom_cell = ALIF_Bottom_Cell(self.in_dims, self.recurrent_dims[0], self.recurrent_dims[1], **neuron_options[0])
@@ -618,17 +730,28 @@ class FourLayer_HGSNN(nn.Module):
         else:
             self.fc = ALIF_Cell(self.recurrent_dims[2], self.out_dims, **out_options)
 
+    def _readout(self, z_2, v_fc, z_fc, a_fc):
+        if self.out_type == 'linear':
+            return self.fc(z_2), v_fc, z_fc, a_fc
+        elif self.out_type == 'lif':
+            v_fc, z_fc = self.fc(z_2, v_fc, z_fc)
+            return z_fc, v_fc, z_fc, a_fc
+        else:
+            v_fc, z_fc, a_fc = self.fc(z_2, v_fc, z_fc, a_fc)
+            return z_fc, v_fc, z_fc, a_fc
+
     def _forward_lif(self, x, logging):
         # x shape: B x T x IN_DIMS
 
         B, T, _ = x.shape
 
         if logging:
+            b_0s = []
             b_1s = []
-            b_2s = []
 
         v_0 = torch.zeros(B, self.recurrent_dims[0])
         z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
 
         v_1 = torch.zeros(B, self.recurrent_dims[1])
         z_1 = torch.zeros(B, self.recurrent_dims[1])
@@ -636,7 +759,6 @@ class FourLayer_HGSNN(nn.Module):
 
         v_2 = torch.zeros(B, self.recurrent_dims[2])
         z_2 = torch.zeros(B, self.recurrent_dims[2])
-        b_2 = torch.zeros(B, 1)
 
         v_fc = torch.zeros(B, self.out_dims)
         z_fc = torch.zeros(B, self.out_dims)
@@ -647,30 +769,23 @@ class FourLayer_HGSNN(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1 = self.middle_cell(z_0, z_2, b_2, v_1, z_1)
-            v_2, z_2, b_2 = self.top_cell(z_1, v_2, z_2)
+            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0, b_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.middle_cell(z_0, v_1, z_1, b_1)
+            v_2, z_2 = self.top_cell(z_1, v_2, z_2)
 
-            if self.out_type == 'linear':
-                output = self.fc(z_2)
-            elif self.out_type == 'lif':
-                v_fc, z_fc = self.fc(z_2, v_fc, z_fc)
-                output = z_fc
-            else:
-                v_fc, z_fc, a_fc = self.fc(z_2, v_fc, z_fc, a_fc)
-                output = z_fc
+            output, v_fc, z_fc, a_fc = self._readout(z_2, v_fc, z_fc, a_fc)
 
             outputs.append(output.clone())
 
             if logging:
+                b_0s.append(b_0.detach().clone())
                 b_1s.append(b_1.detach().clone())
-                b_2s.append(b_2.detach().clone())
 
 
         outputs = torch.stack(outputs, 1)
 
         if logging:
-            return outputs, output, [torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
+            return outputs, output, [torch.stack(b_0s, 1), torch.stack(b_1s, 1)]
 
         return outputs, output
 
@@ -680,11 +795,12 @@ class FourLayer_HGSNN(nn.Module):
         B, T, _ = x.shape
 
         if logging:
+            b_0s = []
             b_1s = []
-            b_2s = []
 
         v_0 = torch.zeros(B, self.recurrent_dims[0])
         z_0 = torch.zeros(B, self.recurrent_dims[0])
+        b_0 = torch.zeros(B, 1)
         a_0 = torch.zeros(B, self.recurrent_dims[0])
 
         v_1 = torch.zeros(B, self.recurrent_dims[1])
@@ -694,7 +810,6 @@ class FourLayer_HGSNN(nn.Module):
 
         v_2 = torch.zeros(B, self.recurrent_dims[2])
         z_2 = torch.zeros(B, self.recurrent_dims[2])
-        b_2 = torch.zeros(B, 1)
         a_2 = torch.zeros(B, self.recurrent_dims[2])
 
         v_fc = torch.zeros(B, self.out_dims)
@@ -706,30 +821,23 @@ class FourLayer_HGSNN(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, a_0 = self.bottom_cell(x_t, z_1, b_1, v_0, z_0, a_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, z_2, b_2, v_1, z_1, a_1)
-            v_2, z_2, b_2, a_2 = self.top_cell(z_1, v_2, z_2, a_2)
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, v_1, z_1, b_1, a_1)
+            v_2, z_2, a_2 = self.top_cell(z_1, v_2, z_2, a_2)
 
-            if self.out_type == 'linear':
-                output = self.fc(z_2)
-            elif self.out_type == 'lif':
-                v_fc, z_fc = self.fc(z_2, v_fc, z_fc)
-                output = z_fc
-            else:
-                v_fc, z_fc, a_fc = self.fc(z_2, v_fc, z_fc, a_fc)
-                output = z_fc
+            output, v_fc, z_fc, a_fc = self._readout(z_2, v_fc, z_fc, a_fc)
 
             outputs.append(output.clone())
 
             if logging:
+                b_0s.append(b_0.detach().clone())
                 b_1s.append(b_1.detach().clone())
-                b_2s.append(b_2.detach().clone())
 
 
         outputs = torch.stack(outputs, 1)
 
         if logging:
-            return outputs, output, [torch.stack(b_1s, 1), torch.stack(b_2s, 1)]
+            return outputs, output, [torch.stack(b_0s, 1), torch.stack(b_1s, 1)]
 
         return outputs, output
 
@@ -738,3 +846,10 @@ class FourLayer_HGSNN(nn.Module):
             return self._forward_lif(x, logging)
         else:
             return self._forward_alif(x, logging)
+
+
+if __name__ == '__main__':
+    x = torch.rand((1, 2, 3))
+    net = ThreeLayer_HGRSNN_no_Share(3, 4, [8, 10, 4])
+
+    net(x)

@@ -7,12 +7,8 @@ import wfdb
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from PIL import Image
 import neurokit2 as nk
-from scipy import stats
 import scipy.signal as signal
-
-from config import ARR_DATA_DIR
 
 # USE THE AAMI EC57 STANDARD: https://arxiv.org/html/2503.07276v1
 # IGNORE CLASS Q (PACED BEATS, V FLUTTER)
@@ -44,44 +40,10 @@ BEAT_TO_ENCODING = {
 
 AAMI_EXCLUDED = {'102', '104', '107', '217'}  # paced records, per AAMI EC57
 
-ARRHYTHMIA_TO_ENCODING = {
-    '(AB': 2,
-    '(AFIB': 1,
-    '(AFIB': 1,
-    '(AFL': 2,
-    '(B': 3,
-    '(BII': 5,
-    '(IVR': 3,
-    '(N': 0,
-    '(NOD': 2,
-    '(P': 4,
-    '(PREX': 4,
-    '(SBR': 0,
-    '(SVTA': 2,
-    '(T': 3,
-    '(VFL': 3,
-    '(VT': 3,
-    'MISSB': -1,
-    'PSE': -1,
-    'TS': -1, 
-    '': -1,
-}
-
-NSR_TO_ENCODING = {
-    'F': -1, 
-    'J': -1, 
-    'N': 0, 
-    'S': -1, 
-    'V': -1, 
-    '|': -1, 
-    '~': -1
-}
-
-
 '''
 this script will be used to preprocess -> slice -> label -> save ecg data
 for labeling... a window will be labeled based on beat-level annotation
-data will be preprocessed using the neurokit method: highpass filter + bandpass filter
+data will be preprocessed using the neurokit method: high-pass butterworth filter + powerline filter
 
 output format: 
     pandas dataframe: sample metadata (patient/record, label, sampling rate)
@@ -200,7 +162,6 @@ def process_patient(patient_path, window_length=1, pre_window=0.0, post_window=0
     '''
     does all the processing for a patient and returns the windowed data and metadata dict
     patient_path: path to ecg
-    dataset: either 'nsr' or 'arr' indicating which dataset the patient belongs to
     window_length: seconds belonging to the labeled beat, centered on the R annotation
     pre_window: extra seconds of context before that span
     post_window: extra seconds of context after that span

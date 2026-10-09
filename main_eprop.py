@@ -3,8 +3,8 @@ standalone training for the e-prop models, per-timestep.
 
 The counterpart to main.py's --train branch, with the batched forward/backward
 replaced by eprop_online.online_train_step: each timestep's loss is backwarded as
-its logits are produced, so peak memory is flat in T rather than ~1.15GB at
-T=300 (see the models/eprop_hsnn.py module docstring). The gradient is unchanged --
+its logits are produced, so peak memory is flat in T rather than ~830MB at
+T=300 (see eprop_online.py). The gradient is unchanged --
 test_eprop_streaming_equivalence.py asserts it against the batched path.
 
 Checkpoints and logs are written in exactly main.py's layout, so the standalone
@@ -12,10 +12,10 @@ evaluation pass is main.py's and is NOT duplicated here -- that code is
 model-agnostic and needs no e-prop variant:
 
     python main_eprop.py --config_file hgrsnn_eprop_large_config.yaml \
-        --model_name ehsnn --data_dir ... --output_dir ...
+        --model_name hgrsnn_eprop --data_dir ... --output_dir ...
 
     python main.py --config_file hgrsnn_eprop_large_config.yaml \
-        --model_name ehsnn --data_dir ... --output_dir ...
+        --model_name hgrsnn_eprop --data_dir ... --output_dir ...
 
 The first trains and reports per-seed test metrics; the second aggregates across
 seeds and writes the ROC plots and metrics csv.
@@ -69,8 +69,8 @@ def train_model(
     '''
     train an e-prop model with per-timestep backward.
 
-    Mirrors main.train_model -- same checkpointing, logging and best-model
-    selection -- differing only in calling online_train_step for the epoch.
+    Mirrors main.train_model -- same checkpointing and logging, final-epoch
+    weights saved -- differing only in calling online_train_step for the epoch.
     '''
 
     train_losses = []
@@ -84,9 +84,6 @@ def train_model(
 
     os.makedirs(logging_configs['weight_folder'], exist_ok=True)
     os.makedirs(log_folder, exist_ok=True)
-
-    best_val_loss = float('inf')
-    best_epoch = None
 
     for epoch in range(num_epochs):
         train_loss = online_train_step(
@@ -113,33 +110,7 @@ def train_model(
 
             log_model(train_losses, val_losses, log_folder, train_aucs, val_aucs)
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_epoch = epoch
-
-                torch.save({
-                    'epoch': epoch,
-                    'model': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'val_loss': val_loss,
-                    'val_auc': val_auc,
-                }, model_path)
-
-                print('Epoch {}: new best val loss {:.4f} (AUC {:.4f}), checkpoint saved'.format(
-                    epoch, val_loss, val_auc))
-                sys.stdout.flush()
-
-    if best_epoch is None:
-        print('warning: no best checkpoint (validation never produced a finite loss); '
-              'saving final epoch {} weights instead'.format(epoch))
-        torch.save({
-            'epoch': epoch,
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-        }, model_path)
-    else:
-        print('Best model: epoch {}, val loss {:.4f}'.format(best_epoch, best_val_loss))
-
+    # the final epoch's weights are the ones evaluated (no early stopping)
     torch.save({
         'epoch': epoch,
         'model': model.state_dict(),
@@ -262,7 +233,8 @@ if __name__ == '__main__':
         log_dir = os.path.join(logging_configs['log_folder'], logging_configs['model_name'])
 
         if binary:
-            threshold = metrics.get_threshold(model, val_loader, encoder, device, beat_bounds=beat_bounds)
+            threshold = metrics.get_threshold(model, val_loader, encoder, device, fix_sensitivity=True,
+                                              beat_bounds=beat_bounds)
 
             accuracy = metrics.get_accuracy(model, test_loader, encoder, binary, threshold, device, beat_bounds=beat_bounds)
             print('\nTest Set Accuracy: {}'.format(accuracy))

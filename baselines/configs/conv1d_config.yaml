@@ -23,7 +23,7 @@ model_kwargs:
   # <= kernel_size so coverage has no holes.
   dilate: true
   dilation_base: 4
-  causal: false       # the SNNs cannot see the future, so neither does this
+  causal: false       # acausal: each output also sees later samples in the window
   dropout: 0.0
   norm: none
   residual: false

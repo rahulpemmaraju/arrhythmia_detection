@@ -21,24 +21,27 @@ def get_activation_fn(act_name, act_kwargs):
         return nn.Sigmoid()
     
 '''
-Hierarchical LIF Layer: see https://arxiv.org/pdf/1609.01704 for inspiration
-The idea: neurons might only share different time-scale information sparsely as needed
-when a "boundary" is detected, a neuron can decide to share its state with other neurons
-high-level neurons always accumulate their internal state; they can be given a bottom-up signal to integrate useful low-level abstractions
-low-level neurons always integrate raw stimulus; they can be given a top-down signal to "reset" their internal state to only capture fine-grained features
-middle-level neurons receive top-down and bottom-up signals to integrate both top-down and bottom-up signals
+Hierarchically gated recurrent SNN (HG-RSNN), inspired by hierarchical multiscale RNNs
+(https://arxiv.org/abs/1609.01704). The bottom and middle cells each emit a binary gate
+b_l[t] (g_l in the paper) from their spikes. When it is on, the layer above reads this
+layer's spikes (sharing), and on the next step this layer's state is reset (flushing).
+The bottom cell always receives the ECG; the top cell is never flushed.
 
-ABLATION of bsnn.py: no interlayer sharing. Boundaries are still emitted and
-still flush the emitting cell's own state, but they no longer gate the bottom-up
-projection -- the layer above reads z_{l-1}[t] at every timestep instead of only
-when the layer below signals a boundary.
+The bottom and middle cells also build a top-down projection (t_v) that is never used.
+It is kept so the published checkpoints load unchanged; it does not affect the output
+and is excluded from the parameter counts in the paper.
 
-"Top Cell": v[t] = alpha * v[t-1] + W_recurrent * z[t-1] + B * z_{l-1}[t] - z[t-1] * v_thresh
-"Bottom Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * x[t] - z[t-1] * v_thresh
-"Middle Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * z_{l-1}[t] - z[t-1] * v_thresh
+ABLATION of hgrsnn.py: no state flushing. Boundaries are still emitted and still
+gate what the layer above reads (interlayer sharing is intact), but a cell no
+longer resets its own state when it fires a boundary -- the (1 - b_{l}[t-1])
+factor is dropped, so every cell integrates continuously like a plain LIF.
 
-z[t] = (v[t] - v_thresh) > 0
-b[t] = Sigmoid(U * z[t]) -> use soft sigmoid
+"Top Cell": v[t] = alpha * v[t-1] + W_recurrent * z[t-1] + B * b_{l-1}[t] * z_{l-1}[t] - z[t-1] * v_thresh
+"Bottom Cell": v[t] = alpha * v[t-1] + W_recurrent * z[t-1] + B * x[t] - z[t-1] * v_thresh
+"Middle Cell": v[t] = alpha * v[t-1] + W_recurrent * z[t-1] + B * b_{l-1}[t] * z_{l-1}[t] - z[t-1] * v_thresh
+
+z[t] = H(v[t] - v_thresh)
+b[t] = H(Sigmoid(U * z[t]) - 0.5)       (H: Heaviside step, arctan surrogate gradient)
 '''
 class LIF_Top_Cell(nn.Module):
 
@@ -75,10 +78,10 @@ class LIF_Top_Cell(nn.Module):
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
-    def forward(self, b_in, v_previous, z_previous):
+    def forward(self, b_in, b_b, v_previous, z_previous):
 
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
-        v_out += self.b_v(b_in) # bottom-up signal
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         z_out = self.spike_grad(v_out - self.threshold)
@@ -130,10 +133,10 @@ class LIF_Middle_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, v_previous, z_previous, b_previous):
+    def forward(self, b_in, b_b, v_previous, z_previous):
 
-        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
-        v_out += self.b_v(b_in) # bottom-up signal
+        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         z_out = self.spike_grad(v_out - self.threshold)
@@ -188,8 +191,8 @@ class LIF_Bottom_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, v_previous, z_previous, b_previous):
-        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
+    def forward(self, b_in, v_previous, z_previous):
+        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
@@ -239,10 +242,10 @@ class ALIF_Top_Cell(nn.Module):
         self.b_v = HebbianLinearLayer(in_dims, out_dims, **linear_options) # bottom to voltage
         self.z_v = HebbianLinearLayer(out_dims, out_dims, masked=True, **linear_options) # spike to voltage
 
-    def forward(self, b_in, v_previous, z_previous, a_previous):
+    def forward(self, b_in, b_b, v_previous, z_previous, a_previous):
 
         v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
-        v_out += self.b_v(b_in) # bottom-up signal
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         a_out = self.rho * a_previous + z_previous
@@ -299,10 +302,10 @@ class ALIF_Middle_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, v_previous, z_previous, b_previous, a_previous):
+    def forward(self, b_in, b_b, v_previous, z_previous, a_previous):
 
-        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
-        v_out += self.b_v(b_in) # bottom-up signal
+        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
+        v_out += b_b * self.b_v(b_in) # bottom-up signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
         a_out = self.rho * a_previous + z_previous
@@ -362,8 +365,8 @@ class ALIF_Bottom_Cell(nn.Module):
         )
         self.b_grad = surrogate.atan(alpha=2)
 
-    def forward(self, b_in, v_previous, z_previous, b_previous, a_previous):
-        v_out = (1 - b_previous) * (self.alpha * v_previous + self.z_v(z_previous)) # layer dynamics
+    def forward(self, b_in, v_previous, z_previous, a_previous):
+        v_out = self.alpha * v_previous + self.z_v(z_previous) # layer dynamics
         v_out += self.b_v(b_in) # bottom-up signal
         v_out -= (z_previous * self.threshold).detach() # reset mechanism
 
@@ -375,7 +378,7 @@ class ALIF_Bottom_Cell(nn.Module):
 
         return v_out, z_out, b_out, a_out
 
-class TwoLayer_BSNN_no_Share(nn.Module):
+class TwoLayer_HGRSNN_no_Flush(nn.Module):
 
     def __init__(
             self,
@@ -408,7 +411,7 @@ class TwoLayer_BSNN_no_Share(nn.Module):
         neuron_options: kwargs to pass to SNN_Cell
         '''
 
-        super(TwoLayer_BSNN_no_Share, self).__init__()
+        super(TwoLayer_HGRSNN_no_Flush, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -447,8 +450,8 @@ class TwoLayer_BSNN_no_Share(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0, b_0) # output spikes are inputs to next layer
-            v_1, z_1 = self.top_cell(z_0, v_1, z_1)
+            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0) # output spikes are inputs to next layer
+            v_1, z_1 = self.top_cell(z_0, b_0, v_1, z_1)
 
             outputs.append(z_1.clone())
 
@@ -485,8 +488,8 @@ class TwoLayer_BSNN_no_Share(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
-            v_1, z_1, a_1 = self.top_cell(z_0, v_1, z_1, a_1)
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, a_1 = self.top_cell(z_0, b_0, v_1, z_1, a_1)
 
             outputs.append(z_1.clone())
 
@@ -508,7 +511,7 @@ class TwoLayer_BSNN_no_Share(nn.Module):
         else:
             return self._forward_alif(x, logging)
         
-class ThreeLayer_BSNN_no_Share(nn.Module):
+class ThreeLayer_HGRSNN_no_Flush(nn.Module):
 
     def __init__(
             self,
@@ -541,7 +544,7 @@ class ThreeLayer_BSNN_no_Share(nn.Module):
         neuron_options: kwargs to pass to SNN_Cell
         '''
 
-        super(ThreeLayer_BSNN_no_Share, self).__init__()
+        super(ThreeLayer_HGRSNN_no_Flush, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -587,9 +590,9 @@ class ThreeLayer_BSNN_no_Share(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0, b_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1 = self.middle_cell(z_0, v_1, z_1, b_1)
-            v_2, z_2 = self.top_cell(z_1, v_2, z_2)
+            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.middle_cell(z_0, b_0, v_1, z_1)
+            v_2, z_2 = self.top_cell(z_1, b_1, v_2, z_2)
 
             outputs.append(z_2.clone())
 
@@ -633,9 +636,9 @@ class ThreeLayer_BSNN_no_Share(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, v_1, z_1, b_1, a_1)
-            v_2, z_2, a_2 = self.top_cell(z_1, v_2, z_2, a_2)
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, b_0, v_1, z_1, a_1)
+            v_2, z_2, a_2 = self.top_cell(z_1, b_1, v_2, z_2, a_2)
 
             outputs.append(z_2.clone())
 
@@ -658,7 +661,7 @@ class ThreeLayer_BSNN_no_Share(nn.Module):
         else:
             return self._forward_alif(x, logging)
         
-class FourLayer_BSNN_no_Share(nn.Module):
+class FourLayer_HGRSNN_no_Flush(nn.Module):
 
     def __init__(
             self,
@@ -693,7 +696,7 @@ class FourLayer_BSNN_no_Share(nn.Module):
         out_options: kwargs to pass to the readout layer
         '''
 
-        super(FourLayer_BSNN_no_Share, self).__init__()
+        super(FourLayer_HGRSNN_no_Flush, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -766,9 +769,9 @@ class FourLayer_BSNN_no_Share(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0, b_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1 = self.middle_cell(z_0, v_1, z_1, b_1)
-            v_2, z_2 = self.top_cell(z_1, v_2, z_2)
+            v_0, z_0, b_0 = self.bottom_cell(x_t, v_0, z_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1 = self.middle_cell(z_0, b_0, v_1, z_1)
+            v_2, z_2 = self.top_cell(z_1, b_1, v_2, z_2)
 
             output, v_fc, z_fc, a_fc = self._readout(z_2, v_fc, z_fc, a_fc)
 
@@ -818,9 +821,9 @@ class FourLayer_BSNN_no_Share(nn.Module):
         for t in range(T):
             x_t = x[:, t, :]
 
-            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, b_0, a_0) # output spikes are inputs to next layer
-            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, v_1, z_1, b_1, a_1)
-            v_2, z_2, a_2 = self.top_cell(z_1, v_2, z_2, a_2)
+            v_0, z_0, b_0, a_0 = self.bottom_cell(x_t, v_0, z_0, a_0) # output spikes are inputs to next layer
+            v_1, z_1, b_1, a_1 = self.middle_cell(z_0, b_0, v_1, z_1, a_1)
+            v_2, z_2, a_2 = self.top_cell(z_1, b_1, v_2, z_2, a_2)
 
             output, v_fc, z_fc, a_fc = self._readout(z_2, v_fc, z_fc, a_fc)
 
@@ -847,6 +850,6 @@ class FourLayer_BSNN_no_Share(nn.Module):
 
 if __name__ == '__main__':
     x = torch.rand((1, 2, 3))
-    net = ThreeLayer_BSNN_no_Share(3, 4, [8, 10, 4])
+    net = ThreeLayer_HGRSNN_no_Flush(3, 4, [8, 10, 4])
 
     net(x)

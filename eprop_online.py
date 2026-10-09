@@ -3,9 +3,8 @@ per-timestep (online) training step for the e-prop models.
 
 The batched step in nested_train.py / main.py runs the whole sequence, then calls
 backward once. For the e-prop models that pins every timestep's eligibility
-traces in memory simultaneously (~1.15GB at recurrent_dims=[32, 64, 32],
-batch=64, T=300, vs ~50MB for the BPTT four_layer_hsnn) -- see
-the models/eprop_hsnn.py module docstring for the measurements and the reasoning.
+traces in memory simultaneously (~830MB at recurrent_dims=[32, 64, 32],
+batch=64, T=300) -- test_eprop_streaming_equivalence.py measures it.
 
 online_train_step instead backwards each timestep's loss term the moment its
 logits exist, which frees that timestep's traces immediately. The accumulated

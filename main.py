@@ -16,14 +16,13 @@ from sklearn.metrics import confusion_matrix, roc_auc_score, precision_recall_fs
 
 from dataloader import train_test_val_split, get_dataset_statistics, get_beat_bounds
 from models import create_model
-from utils.encoding import Rate_Encoder, Current_Encoder, unpack_batch
+from utils.encoding import Current_Encoder, unpack_batch
 from utils.readout import prepare_loss_inputs, compute_auc, multiclass_auc
 
 from utils.logging import log_model
 import utils.metrics as metrics
 
 torch.set_num_threads(1)
-# get 5-fold validation model performance
 
 def get_binary_metrics(model, test_loader, encoder, threshold, device='cpu', beat_bounds=None):
     y_true = []
@@ -280,9 +279,6 @@ def train_model(
     os.makedirs(logging_configs['weight_folder'], exist_ok=True)
     os.makedirs(log_folder, exist_ok=True)
 
-    best_val_loss = float('inf')
-    best_epoch = None
-
     for epoch in range(num_epochs):
         train_loss = train_step(model, train_loader, encoder, optimizer, loss_fn, epoch, device, beat_bounds, binary)
         train_losses.append((epoch, train_loss))
@@ -306,33 +302,7 @@ def train_model(
 
             log_model(train_losses, val_losses, log_folder, train_aucs, val_aucs)
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_epoch = epoch
-
-                torch.save({
-                    'epoch': epoch,
-                    'model': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'val_loss': val_loss,
-                    'val_auc': val_auc,
-                }, model_path)
-
-                print('Epoch {}: new best val loss {:.4f} (AUC {:.4f}), checkpoint saved'.format(
-                    epoch, val_loss, val_auc))
-                sys.stdout.flush()
-
-    if best_epoch is None:
-        print('warning: no best checkpoint (validation never produced a finite loss); '
-              'saving final epoch {} weights instead'.format(epoch))
-        torch.save({
-            'epoch': epoch,
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-        }, model_path)
-    else:
-        print('Best model: epoch {}, val loss {:.4f}'.format(best_epoch, best_val_loss))
-
+    # the final epoch's weights are the ones evaluated (no early stopping)
     torch.save({
         'epoch': epoch,
         'model': model.state_dict(),
@@ -346,8 +316,8 @@ def train_model(
 if __name__ == '__main__':
 
     '''
-        Main function to train/evaluate arrhythmia detection models. 
-        Can be used to train a specific model config using 5-fold validation and/or evaluate a specific model config
+        Main function to train/evaluate arrhythmia detection models.
+        Trains a model config over several seeds (weight initializations) and/or evaluates the trained weights
     '''
 
     import argparse
@@ -471,7 +441,8 @@ if __name__ == '__main__':
             log_dir = os.path.join(logging_configs['log_folder'], logging_configs['model_name'])
 
             if binary:
-                threshold = metrics.get_threshold(model, val_loader, encoder, device, beat_bounds=beat_bounds)
+                threshold = metrics.get_threshold(model, val_loader, encoder, device, fix_sensitivity=True,
+                                                  beat_bounds=beat_bounds)
 
                 accuracy = metrics.get_accuracy(model, test_loader, encoder, binary, threshold, device, beat_bounds=beat_bounds)
                 print('\nTest Set Accuracy: {}'.format(accuracy))

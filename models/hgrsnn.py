@@ -21,19 +21,22 @@ def get_activation_fn(act_name, act_kwargs):
         return nn.Sigmoid()
     
 '''
-Hierarchical LIF Layer: see https://arxiv.org/pdf/1609.01704 for inspiration
-The idea: neurons might only share different time-scale information sparsely as needed
-when a "boundary" is detected, a neuron can decide to share its state with other neurons
-high-level neurons always accumulate their internal state; they can be given a bottom-up signal to integrate useful low-level abstractions
-low-level neurons always integrate raw stimulus; they can be given a top-down signal to "reset" their internal state to only capture fine-grained features
-middle-level neurons receive top-down and bottom-up signals to integrate both top-down and bottom-up signals
+Hierarchically gated recurrent SNN (HG-RSNN), inspired by hierarchical multiscale RNNs
+(https://arxiv.org/abs/1609.01704). The bottom and middle cells each emit a binary gate
+b_l[t] (g_l in the paper) from their spikes. When it is on, the layer above reads this
+layer's spikes (sharing), and on the next step this layer's state is reset (flushing).
+The bottom cell always receives the ECG; the top cell is never flushed.
+
+The bottom and middle cells also build a top-down projection (t_v) that is never used.
+It is kept so the published checkpoints load unchanged; it does not affect the output
+and is excluded from the parameter counts in the paper.
 
 "Top Cell": v[t] = alpha * v[t-1] + W_recurrent * z[t-1] + B * b_{l-1}[t] * z_{l-1}[t] - z[t-1] * v_thresh
-"Bottom Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * x[t] + T * b_{l+1}[t-1] * z_{l+1}[t-1] - z[t-1] * v_thresh
-"Middle Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * b_{l-1}[t] * z_{l-1}[t] + T * b_{l+1}[t-1] * z_{l+1}[t-1] - z[t-1] * v_thresh
+"Bottom Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * x[t] - z[t-1] * v_thresh
+"Middle Cell": v[t] = (1 - b_{l}[t-1]) * (alpha * v[t-1] + W_recurrent * z[t-1]) + B * b_{l-1}[t] * z_{l-1}[t] - z[t-1] * v_thresh
 
-z[t] = (v[t] - v_thresh) > 0
-b[t] = Sigmoid(U * z[t]) -> use soft sigmoid
+z[t] = H(v[t] - v_thresh)
+b[t] = H(Sigmoid(U * z[t]) - 0.5)       (H: Heaviside step, arctan surrogate gradient)
 '''
 class LIF_Top_Cell(nn.Module):
 
@@ -370,7 +373,7 @@ class ALIF_Bottom_Cell(nn.Module):
 
         return v_out, z_out, b_out, a_out
 
-class TwoLayer_BSNN(nn.Module):
+class TwoLayer_HGRSNN(nn.Module):
 
     def __init__(
             self,
@@ -403,7 +406,7 @@ class TwoLayer_BSNN(nn.Module):
         neuron_options: kwargs to pass to SNN_Cell
         '''
 
-        super(TwoLayer_BSNN, self).__init__()
+        super(TwoLayer_HGRSNN, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -503,7 +506,7 @@ class TwoLayer_BSNN(nn.Module):
         else:
             return self._forward_alif(x, logging)
         
-class ThreeLayer_BSNN(nn.Module):
+class ThreeLayer_HGRSNN(nn.Module):
 
     def __init__(
             self,
@@ -536,7 +539,7 @@ class ThreeLayer_BSNN(nn.Module):
         neuron_options: kwargs to pass to SNN_Cell
         '''
 
-        super(ThreeLayer_BSNN, self).__init__()
+        super(ThreeLayer_HGRSNN, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -653,7 +656,7 @@ class ThreeLayer_BSNN(nn.Module):
         else:
             return self._forward_alif(x, logging)
         
-class FourLayer_BSNN(nn.Module):
+class FourLayer_HGRSNN(nn.Module):
 
     def __init__(
             self,
@@ -688,7 +691,7 @@ class FourLayer_BSNN(nn.Module):
         out_options: kwargs to pass to the readout layer
         '''
 
-        super(FourLayer_BSNN, self).__init__()
+        super(FourLayer_HGRSNN, self).__init__()
 
         self.in_dims = in_dims
         self.out_dims = out_dims
@@ -842,6 +845,6 @@ class FourLayer_BSNN(nn.Module):
 
 if __name__ == '__main__':
     x = torch.rand((1, 2, 3))
-    net = ThreeLayer_BSNN(3, 4, [8, 10, 4])
+    net = ThreeLayer_HGRSNN(3, 4, [8, 10, 4])
 
     net(x)

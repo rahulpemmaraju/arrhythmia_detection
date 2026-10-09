@@ -26,7 +26,7 @@ stages:
   compute_features: train_model
   filter_features: combine_losses
   get_objectives: get_objectives
-optimization_title: four_layer_ehsnn_lif
+optimization_title: four_layer_hgrsnn_eprop_lif
 objective_names:
 - avg_val_loss
 - avg_val_auc
@@ -39,16 +39,16 @@ x0:
   threshold_2: 1.0
   lr: 0.001
 xbest:
-  alpha_0: 0.9
-  threshold_0: 1.0
-  alpha_1: 0.9
-  threshold_1: 1.0
-  alpha_2: 0.9
-  threshold_2: 1.0
-  lr: 0.001
+  alpha_0: 0.11360920571465782
+  threshold_0: 0.998272625127205
+  alpha_1: 0.8670326284810818
+  threshold_1: 0.23481541378005777
+  alpha_2: 0.9291727414909614
+  threshold_2: 0.10544037742298731
+  lr: 0.8645826340015859
 kwargs:
   num_seeds: 5
-  model_type: four_layer_ehsnn
+  model_type: four_layer_hgrsnn_eprop
   recurrent_dims:
   - 32
   - 64
